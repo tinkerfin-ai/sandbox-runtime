@@ -71,6 +71,13 @@ assert_contains .github/workflows/release.yml 'ghcr.io/tinkerfin-ai/sandbox-runt
 assert_contains .github/workflows/release.yml 'visibility=public'
 assert_contains .github/workflows/release.yml 'Verify anonymous image access'
 
+runtime_install_line=$(rg --line-number --max-count 1 '^RUN python -m venv' \
+    "${REPO_ROOT}/Dockerfile" | cut -d: -f1)
+image_label_line=$(rg --line-number --max-count 1 \
+    '^LABEL org\.opencontainers\.image\.title' "${REPO_ROOT}/Dockerfile" | cut -d: -f1)
+[[ ${runtime_install_line} -lt ${image_label_line} ]] \
+    || fail "volatile image labels must follow runtime installation for cache reuse"
+
 for package in numpy pandas matplotlib requests beautifulsoup4; do
     assert_contains requirements.in "^${package}=="
 done

@@ -58,16 +58,6 @@ ARG VCS_REF=unknown
 ARG BUILD_DATE=unknown
 ARG DEBIAN_FRONTEND=noninteractive
 
-LABEL org.opencontainers.image.title="TinkerFin Sandbox Runtime" \
-      org.opencontainers.image.description="Multi-architecture OpenSandbox runtime for Python, Java, Node.js, Go, and Maven" \
-      org.opencontainers.image.url="https://github.com/tinkerfin-ai/sandbox-runtime" \
-      org.opencontainers.image.source="https://github.com/tinkerfin-ai/sandbox-runtime" \
-      org.opencontainers.image.documentation="https://github.com/tinkerfin-ai/sandbox-runtime#readme" \
-      org.opencontainers.image.licenses="Apache-2.0" \
-      org.opencontainers.image.version="${RUNTIME_VERSION}" \
-      org.opencontainers.image.revision="${VCS_REF}" \
-      org.opencontainers.image.created="${BUILD_DATE}"
-
 SHELL ["/bin/bash", "-Eeuo", "pipefail", "-c"]
 
 ENV VIRTUAL_ENV=/opt/sandbox-runtime/venv \
@@ -150,5 +140,14 @@ COPY --chmod=0755 scripts/entrypoint.sh /opt/sandbox-runtime/bin/entrypoint.sh
 
 WORKDIR /workspace
 STOPSIGNAL SIGTERM
+LABEL org.opencontainers.image.title="TinkerFin Sandbox Runtime" \
+      org.opencontainers.image.description="Multi-architecture OpenSandbox runtime for Python, Java, Node.js, Go, and Maven" \
+      org.opencontainers.image.url="https://github.com/tinkerfin-ai/sandbox-runtime" \
+      org.opencontainers.image.source="https://github.com/tinkerfin-ai/sandbox-runtime" \
+      org.opencontainers.image.documentation="https://github.com/tinkerfin-ai/sandbox-runtime#readme" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.version="${RUNTIME_VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.created="${BUILD_DATE}"
 ENTRYPOINT ["/opt/sandbox-runtime/bin/entrypoint.sh"]
 CMD []
