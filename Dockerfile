@@ -6,11 +6,13 @@ FROM ${PYTHON_IMAGE} AS downloads
 
 ARG TARGETARCH
 ARG NODE_VERSION=22.23.2
-ARG GO_VERSION=1.25.5
+ARG NPM_VERSION=10.9.9
+ARG GO_VERSION=1.25.7
 ARG NODE_SHA256_AMD64=d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307
 ARG NODE_SHA256_ARM64=fff4078c5def658577f92c88db7db3bc0072924bfb93fe52c1e744a54e94abb8
-ARG GO_SHA256_AMD64=9e9b755d63b36acf30c12a9a3fc379243714c1c6d3dd72861da637f336ebb35b
-ARG GO_SHA256_ARM64=b00b694903d126c588c378e72d3545549935d3982635ba3f7a964c9fa23fe3b9
+ARG NPM_SHA512=d60fba8cb42f688b81e33c2f1cbef2ad7b977166700ec0ad057f1b6d60ea6ef2524abf673e20c35931cd8305d1dbb8887134d6eefdc0e7b8435bd458bf65b862
+ARG GO_SHA256_AMD64=12e6d6a191091ae27dc31f6efc630e3a3b8ba409baf3573d955b196fdf086005
+ARG GO_SHA256_ARM64=ba611a53534135a81067240eff9508cd7e256c560edd5d8c2fef54f083c07129
 
 SHELL ["/bin/bash", "-Eeuo", "pipefail", "-c"]
 
@@ -24,16 +26,22 @@ RUN case "${TARGETARCH}" in \
         *) printf 'unsupported TARGETARCH: %s\n' "${TARGETARCH}" >&2; exit 1 ;; \
     esac \
     && node_archive="node-v${NODE_VERSION}-linux-${node_arch}.tar.xz" \
+    && npm_archive="npm-${NPM_VERSION}.tgz" \
     && go_archive="go${GO_VERSION}.linux-${TARGETARCH}.tar.gz" \
     && curl --fail --location --retry 5 --output "/tmp/${node_archive}" \
         "https://nodejs.org/dist/v${NODE_VERSION}/${node_archive}" \
     && printf '%s  %s\n' "${node_sha256}" "/tmp/${node_archive}" | sha256sum --check --strict \
+    && curl --fail --location --retry 5 --output "/tmp/${npm_archive}" \
+        "https://registry.npmjs.org/npm/-/${npm_archive}" \
+    && printf '%s  %s\n' "${NPM_SHA512}" "/tmp/${npm_archive}" | sha512sum --check --strict \
     && curl --fail --location --retry 5 --output "/tmp/${go_archive}" \
         "https://go.dev/dl/${go_archive}" \
     && printf '%s  %s\n' "${go_sha256}" "/tmp/${go_archive}" | sha256sum --check --strict \
     && install -d /opt/sandbox-runtime/node /opt/sandbox-runtime/go \
     && tar --extract --xz --file "/tmp/${node_archive}" \
         --directory /opt/sandbox-runtime/node --strip-components 1 \
+    && PATH=/opt/sandbox-runtime/node/bin:${PATH} \
+        npm install --global --offline "/tmp/${npm_archive}" \
     && tar --extract --gzip --file "/tmp/${go_archive}" \
         --directory /opt/sandbox-runtime/go --strip-components 1
 
@@ -43,7 +51,8 @@ ARG RUNTIME_VERSION=0.1.0
 ARG PYTHON_VERSION=3.11.15
 ARG JAVA_VERSION=21
 ARG NODE_VERSION=22.23.2
-ARG GO_VERSION=1.25.5
+ARG NPM_VERSION=10.9.9
+ARG GO_VERSION=1.25.7
 ARG MAVEN_VERSION=3.9.9
 ARG VCS_REF=unknown
 ARG BUILD_DATE=unknown
@@ -134,6 +143,7 @@ RUN python -m venv "${VIRTUAL_ENV}" \
     && "${VIRTUAL_ENV}/bin/pip" check \
     && find "${VIRTUAL_ENV}" -type d -name __pycache__ -prune -exec rm -rf '{}' + \
     && [[ $(node --version) == "v${NODE_VERSION}" ]] \
+    && [[ $(npm --version) == "${NPM_VERSION}" ]] \
     && [[ $(go version) == *" go${GO_VERSION} "* ]]
 
 COPY --chmod=0755 scripts/entrypoint.sh /opt/sandbox-runtime/bin/entrypoint.sh

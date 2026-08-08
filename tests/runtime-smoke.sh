@@ -25,6 +25,13 @@ container_id=$(docker run --detach \
     --env EXECD_ENVS=/tmp/execd.env \
     "${IMAGE_REF}")
 [[ $(docker inspect --format '{{.State.Running}}' "${container_id}") == true ]]
+for _attempt in {1..75}; do
+    if docker exec "${container_id}" test -f /tmp/execd.env; then
+        break
+    fi
+    sleep 0.2
+done
+docker exec "${container_id}" test -f /tmp/execd.env
 docker exec "${container_id}" bash -Eeuo pipefail -c '
     test "$(rg --count "^PATH=" /tmp/execd.env)" -eq 1
     test "$(rg --count "^VIRTUAL_ENV=" /tmp/execd.env)" -eq 1
@@ -69,7 +76,7 @@ PY
     test ! -e /root/.m2/repository
 
     test "$(node -e "process.stdout.write(\"node-ok\")")" = node-ok
-    npm --version >/dev/null
+    test "$(npm --version)" = 10.9.9
 
     printf "%s\\n" \
         "package main" \

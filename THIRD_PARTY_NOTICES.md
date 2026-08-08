@@ -9,6 +9,7 @@ component remains under its own license.
 | CPython | https://www.python.org/ | Python Software Foundation License |
 | OpenJDK | https://openjdk.org/ | GPL-2.0 with Classpath Exception |
 | Node.js | https://nodejs.org/ | MIT |
+| npm CLI | https://github.com/npm/cli | Artistic-2.0 |
 | Go | https://go.dev/ | BSD-3-Clause |
 | Apache Maven | https://maven.apache.org/ | Apache-2.0 |
 | NumPy | https://numpy.org/ | BSD-3-Clause |

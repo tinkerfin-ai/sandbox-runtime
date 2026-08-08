@@ -55,8 +55,10 @@ source "${REPO_ROOT}/versions.env"
 [[ ${PYTHON_VERSION} =~ ^3\.11\.[0-9]+$ ]] || fail "Python must stay on 3.11"
 [[ ${JAVA_VERSION} =~ ^21([.+_][0-9]+)*$ ]] || fail "Java must stay on 21"
 [[ ${NODE_VERSION} =~ ^22\.[0-9]+\.[0-9]+$ ]] || fail "Node must stay on 22"
+[[ ${NPM_VERSION} =~ ^10\.9\.[0-9]+$ ]] || fail "npm must stay on 10.9"
 [[ ${GO_VERSION} =~ ^1\.25\.[0-9]+$ ]] || fail "Go must stay on 1.25"
 [[ ${MAVEN_VERSION} =~ ^3\.9\.[0-9]+$ ]] || fail "Maven must stay on 3.9"
+[[ ${NPM_SHA512} =~ ^[0-9a-f]{128}$ ]] || fail "npm SHA-512 is invalid"
 
 assert_contains Dockerfile 'VIRTUAL_ENV=/opt/sandbox-runtime/venv'
 assert_contains Dockerfile 'JAVA_HOME=/opt/sandbox-runtime/jdk'

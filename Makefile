@@ -18,10 +18,12 @@ BUILD_ARGS = \
 	--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
 	--build-arg JAVA_VERSION=$(JAVA_VERSION) \
 	--build-arg NODE_VERSION=$(NODE_VERSION) \
+	--build-arg NPM_VERSION=$(NPM_VERSION) \
 	--build-arg GO_VERSION=$(GO_VERSION) \
 	--build-arg MAVEN_VERSION=$(MAVEN_VERSION) \
 	--build-arg NODE_SHA256_AMD64=$(NODE_SHA256_AMD64) \
 	--build-arg NODE_SHA256_ARM64=$(NODE_SHA256_ARM64) \
+	--build-arg NPM_SHA512=$(NPM_SHA512) \
 	--build-arg GO_SHA256_AMD64=$(GO_SHA256_AMD64) \
 	--build-arg GO_SHA256_ARM64=$(GO_SHA256_ARM64)
 

@@ -65,10 +65,12 @@ jobs:
             PYTHON_VERSION=${{ env.PYTHON_VERSION }}
             JAVA_VERSION=${{ env.JAVA_VERSION }}
             NODE_VERSION=${{ env.NODE_VERSION }}
+            NPM_VERSION=${{ env.NPM_VERSION }}
             GO_VERSION=${{ env.GO_VERSION }}
             MAVEN_VERSION=${{ env.MAVEN_VERSION }}
             NODE_SHA256_AMD64=${{ env.NODE_SHA256_AMD64 }}
             NODE_SHA256_ARM64=${{ env.NODE_SHA256_ARM64 }}
+            NPM_SHA512=${{ env.NPM_SHA512 }}
             GO_SHA256_AMD64=${{ env.GO_SHA256_AMD64 }}
             GO_SHA256_ARM64=${{ env.GO_SHA256_ARM64 }}
             BUILD_DATE=${{ env.BUILD_DATE }}

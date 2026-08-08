@@ -17,7 +17,8 @@ packages.
 | Python virtual environment | 3.11 | `/opt/sandbox-runtime/venv` |
 | OpenJDK | 21 | `/opt/sandbox-runtime/jdk` |
 | Node.js | 22.23.2 | `/opt/sandbox-runtime/node` |
-| Go | 1.25.5 | `/opt/sandbox-runtime/go` |
+| npm | 10.9.9 | `/opt/sandbox-runtime/node` |
+| Go | 1.25.7 | `/opt/sandbox-runtime/go` |
 | Apache Maven | 3.9.9 | `/opt/sandbox-runtime/maven` |
 
 The Python environment includes NumPy, pandas, Matplotlib, Requests, and
