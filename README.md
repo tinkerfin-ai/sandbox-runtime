@@ -49,8 +49,8 @@ docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.0 python --version
 docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.0 mvn --version
 ```
 
-Use an immutable manifest digest in production. Version tags are immutable;
-`latest` is intended only for interactive evaluation.
+Use an immutable manifest digest in production. Version tags are immutable, and
+the project intentionally does not publish a mutable `latest` tag.
 
 For OpenSandbox 0.1.x, pass the runtime entrypoint as the sandbox command:
 

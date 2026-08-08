@@ -44,7 +44,7 @@ Dockerfile `ENV`，不能依赖入口脚本后置修改。入口脚本只在服�
 
 源码采用 Apache-2.0。Pull Request 构建并冒烟测试两个架构；版本 tag 发布公开
 GHCR 镜像、SBOM、provenance 和 keyless 签名。不可变版本 tag 永不覆盖，
-TinkerFin 固定到 manifest digest，`latest` 只供交互试用。
+不发布可变的 `latest` tag，TinkerFin 固定到 manifest digest。
 
 ## 成功标准
 
