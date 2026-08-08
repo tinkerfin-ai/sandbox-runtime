@@ -76,7 +76,33 @@ PY
     test ! -e /root/.m2/repository
 
     test "$(node -e "process.stdout.write(\"node-ok\")")" = node-ok
-    test "$(npm --version)" = 10.9.9
+    test "$(npm --version)" = 12.0.2
+    test "$(node -p \
+        "require(\"/opt/sandbox-runtime/node/lib/node_modules/npm/node_modules/brace-expansion/package.json\").version")" \
+        = 5.0.9
+    test "$(node -p \
+        "require(\"/opt/sandbox-runtime/node/lib/node_modules/npm/node_modules/ip-address/package.json\").version")" \
+        = 10.3.1
+    node - <<"JS"
+const assert = require("node:assert/strict");
+const npmModules = "/opt/sandbox-runtime/node/lib/node_modules/npm/node_modules";
+const { minimatch } = require(`${npmModules}/minimatch`);
+const { Address4, Address6 } = require(`${npmModules}/ip-address`);
+
+assert.equal(minimatch("src/main.js", "src/*.{js,ts}"), true);
+assert.equal(new Address4("127.0.0.1").isCorrect(), true);
+assert.equal(new Address6("::1").isCorrect(), true);
+JS
+    mkdir /tmp/npm-smoke
+    printf "%s\n" \
+        "{\"name\":\"npm-smoke\",\"version\":\"1.0.0\"}" \
+        >/tmp/npm-smoke/package.json
+    (cd /tmp/npm-smoke && npm pack --ignore-scripts --silent >/tmp/npm-pack-output.txt)
+    test -s /tmp/npm-smoke/npm-smoke-1.0.0.tgz
+
+    test "$(python -c "import setuptools; print(setuptools.__version__)")" = 84.0.0
+    test "$(/usr/local/bin/python -c \
+        "import setuptools; print(setuptools.__version__)")" = 84.0.0
 
     printf "%s\\n" \
         "package main" \

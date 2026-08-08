@@ -6,13 +6,19 @@ FROM ${PYTHON_IMAGE} AS downloads
 
 ARG TARGETARCH
 ARG NODE_VERSION=22.23.2
-ARG NPM_VERSION=10.9.9
-ARG GO_VERSION=1.25.7
+ARG NPM_VERSION=12.0.2
+ARG GO_VERSION=1.25.12
+ARG SETUPTOOLS_VERSION=84.0.0
+ARG NPM_BRACE_EXPANSION_VERSION=5.0.9
+ARG NPM_IP_ADDRESS_VERSION=10.3.1
 ARG NODE_SHA256_AMD64=d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307
 ARG NODE_SHA256_ARM64=fff4078c5def658577f92c88db7db3bc0072924bfb93fe52c1e744a54e94abb8
-ARG NPM_SHA512=d60fba8cb42f688b81e33c2f1cbef2ad7b977166700ec0ad057f1b6d60ea6ef2524abf673e20c35931cd8305d1dbb8887134d6eefdc0e7b8435bd458bf65b862
-ARG GO_SHA256_AMD64=12e6d6a191091ae27dc31f6efc630e3a3b8ba409baf3573d955b196fdf086005
-ARG GO_SHA256_ARM64=ba611a53534135a81067240eff9508cd7e256c560edd5d8c2fef54f083c07129
+ARG NPM_SHA512=b885e890b9418fa1693544d05f53e64f9a73ec194837d4258b15fecdd692347b1dd2a517b1b0cbaf9d31cd8e92c3b70956bd2ecc72833a57b4b3098f5bfa7943
+ARG NPM_BRACE_EXPANSION_SHA512=49c43822ebc8105d533253fb66dfaf8c9ffff7394f6f64837315b13376e4f2ceade8619d27b28ed5d09c4e274e3c929e3d6df42c4ff6713ef00b23e1a3dfd6c6
+ARG NPM_IP_ADDRESS_SHA512=d5ef5dde46fdecd1c94c8243656f6b2aa5b687af9d15ae740f2d1fa4f48c429d800e37b982f2ac5e67622ba770639b7be93693b79f8fe4dd58fcba13a08c4fea
+ARG SETUPTOOLS_SHA256=51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670
+ARG GO_SHA256_AMD64=234828b7a89e0e303d2556310ee549fbcf253d28de937bac3da13d6294262ac1
+ARG GO_SHA256_ARM64=8b5884aef89600aef5b0b051fb971f11f49bb996521e911f30f02a66884f7bd2
 
 SHELL ["/bin/bash", "-Eeuo", "pipefail", "-c"]
 
@@ -27,6 +33,9 @@ RUN case "${TARGETARCH}" in \
     esac \
     && node_archive="node-v${NODE_VERSION}-linux-${node_arch}.tar.xz" \
     && npm_archive="npm-${NPM_VERSION}.tgz" \
+    && brace_expansion_archive="brace-expansion-${NPM_BRACE_EXPANSION_VERSION}.tgz" \
+    && ip_address_archive="ip-address-${NPM_IP_ADDRESS_VERSION}.tgz" \
+    && setuptools_wheel="setuptools-${SETUPTOOLS_VERSION}-py3-none-any.whl" \
     && go_archive="go${GO_VERSION}.linux-${TARGETARCH}.tar.gz" \
     && curl --fail --location --retry 5 --output "/tmp/${node_archive}" \
         "https://nodejs.org/dist/v${NODE_VERSION}/${node_archive}" \
@@ -34,6 +43,18 @@ RUN case "${TARGETARCH}" in \
     && curl --fail --location --retry 5 --output "/tmp/${npm_archive}" \
         "https://registry.npmjs.org/npm/-/${npm_archive}" \
     && printf '%s  %s\n' "${NPM_SHA512}" "/tmp/${npm_archive}" | sha512sum --check --strict \
+    && curl --fail --location --retry 5 --output "/tmp/${brace_expansion_archive}" \
+        "https://registry.npmjs.org/brace-expansion/-/${brace_expansion_archive}" \
+    && printf '%s  %s\n' "${NPM_BRACE_EXPANSION_SHA512}" "/tmp/${brace_expansion_archive}" \
+        | sha512sum --check --strict \
+    && curl --fail --location --retry 5 --output "/tmp/${ip_address_archive}" \
+        "https://registry.npmjs.org/ip-address/-/${ip_address_archive}" \
+    && printf '%s  %s\n' "${NPM_IP_ADDRESS_SHA512}" "/tmp/${ip_address_archive}" \
+        | sha512sum --check --strict \
+    && curl --fail --location --retry 5 --output /tmp/setuptools.whl \
+        "https://files.pythonhosted.org/packages/py3/s/setuptools/${setuptools_wheel}" \
+    && printf '%s  %s\n' "${SETUPTOOLS_SHA256}" /tmp/setuptools.whl \
+        | sha256sum --check --strict \
     && curl --fail --location --retry 5 --output "/tmp/${go_archive}" \
         "https://go.dev/dl/${go_archive}" \
     && printf '%s  %s\n' "${go_sha256}" "/tmp/${go_archive}" | sha256sum --check --strict \
@@ -42,18 +63,36 @@ RUN case "${TARGETARCH}" in \
         --directory /opt/sandbox-runtime/node --strip-components 1 \
     && PATH=/opt/sandbox-runtime/node/bin:${PATH} \
         npm install --global --offline "/tmp/${npm_archive}" \
+    && npm_root=/opt/sandbox-runtime/node/lib/node_modules/npm \
+    && rm -rf \
+        "${npm_root}/node_modules/brace-expansion" \
+        "${npm_root}/node_modules/ip-address" \
+    && install -d \
+        "${npm_root}/node_modules/brace-expansion" \
+        "${npm_root}/node_modules/ip-address" \
+    && tar --extract --gzip --file "/tmp/${brace_expansion_archive}" \
+        --directory "${npm_root}/node_modules/brace-expansion" --strip-components 1 \
+    && tar --extract --gzip --file "/tmp/${ip_address_archive}" \
+        --directory "${npm_root}/node_modules/ip-address" --strip-components 1 \
+    && [[ $(/opt/sandbox-runtime/node/bin/node -p \
+            "require('${npm_root}/node_modules/brace-expansion/package.json').version") \
+            == "${NPM_BRACE_EXPANSION_VERSION}" ]] \
+    && [[ $(/opt/sandbox-runtime/node/bin/node -p \
+            "require('${npm_root}/node_modules/ip-address/package.json').version") \
+            == "${NPM_IP_ADDRESS_VERSION}" ]] \
     && tar --extract --gzip --file "/tmp/${go_archive}" \
         --directory /opt/sandbox-runtime/go --strip-components 1
 
 FROM ${PYTHON_IMAGE}
 
-ARG RUNTIME_VERSION=0.1.0
+ARG RUNTIME_VERSION=0.1.1
 ARG PYTHON_VERSION=3.11.15
 ARG JAVA_VERSION=21
 ARG NODE_VERSION=22.23.2
-ARG NPM_VERSION=10.9.9
-ARG GO_VERSION=1.25.7
+ARG NPM_VERSION=12.0.2
+ARG GO_VERSION=1.25.12
 ARG MAVEN_VERSION=3.9.9
+ARG SETUPTOOLS_VERSION=84.0.0
 ARG VCS_REF=unknown
 ARG BUILD_DATE=unknown
 ARG DEBIAN_FRONTEND=noninteractive
@@ -126,7 +165,12 @@ COPY --from=downloads /opt/sandbox-runtime/go /opt/sandbox-runtime/go
 COPY pip.conf /etc/pip.conf
 COPY requirements.in requirements.lock /opt/sandbox-runtime/
 
-RUN python -m venv "${VIRTUAL_ENV}" \
+RUN --mount=type=bind,from=downloads,source=/tmp/setuptools.whl,target=/tmp/setuptools-${SETUPTOOLS_VERSION}-py3-none-any.whl \
+    /usr/local/bin/python -m pip install --root-user-action=ignore --no-index --no-deps \
+        "/tmp/setuptools-${SETUPTOOLS_VERSION}-py3-none-any.whl" \
+    && /usr/local/bin/python -m venv "${VIRTUAL_ENV}" \
+    && "${VIRTUAL_ENV}/bin/pip" install --no-index --no-deps \
+        "/tmp/setuptools-${SETUPTOOLS_VERSION}-py3-none-any.whl" \
     && "${VIRTUAL_ENV}/bin/pip" install \
         --require-hashes --only-binary=:all: \
         --requirement /opt/sandbox-runtime/requirements.lock \
@@ -134,7 +178,11 @@ RUN python -m venv "${VIRTUAL_ENV}" \
     && find "${VIRTUAL_ENV}" -type d -name __pycache__ -prune -exec rm -rf '{}' + \
     && [[ $(node --version) == "v${NODE_VERSION}" ]] \
     && [[ $(npm --version) == "${NPM_VERSION}" ]] \
-    && [[ $(go version) == *" go${GO_VERSION} "* ]]
+    && [[ $(go version) == *" go${GO_VERSION} "* ]] \
+    && [[ $(python -c 'import setuptools; print(setuptools.__version__)') \
+        == "${SETUPTOOLS_VERSION}" ]] \
+    && [[ $(/usr/local/bin/python -c 'import setuptools; print(setuptools.__version__)') \
+        == "${SETUPTOOLS_VERSION}" ]]
 
 COPY --chmod=0755 scripts/entrypoint.sh /opt/sandbox-runtime/bin/entrypoint.sh
 

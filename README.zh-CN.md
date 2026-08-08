@@ -11,12 +11,12 @@
 ## 快速使用
 
 ```bash
-docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.0 python --version
-docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.0 mvn --version
+docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.1 python --version
+docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.1 mvn --version
 ```
 
-测试时可以使用版本标签；生产环境应固定 OCI manifest digest。版本标签不可变，
-本项目不发布 `latest` 标签。
+测试时可以使用精确版本标签；生产环境应固定 OCI manifest digest。精确版本标签
+不可变，不要把 `latest` 作为更新渠道。
 
 ## 内置环境
 
@@ -24,8 +24,8 @@ docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.0 mvn --version
 | --- | --- |
 | Python | 3.11.15 |
 | OpenJDK | 21 |
-| Node.js / npm | 22.23.2 / 10.9.9 |
-| Go | 1.25.7 |
+| Node.js / npm | 22.23.2 / 12.0.2 |
+| Go | 1.25.12 |
 | Apache Maven | 3.9.9 |
 
 Python 虚拟环境位于 `/opt/sandbox-runtime/venv`，预装 NumPy、pandas、
@@ -46,7 +46,7 @@ from datetime import timedelta
 from opensandbox import SandboxSync
 
 sandbox = SandboxSync.create(
-    "ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.0",
+    "ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.1",
     entrypoint=["/opt/sandbox-runtime/bin/entrypoint.sh"],
     timeout=timedelta(hours=2),
 )
