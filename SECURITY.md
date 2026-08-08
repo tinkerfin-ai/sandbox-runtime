@@ -2,22 +2,16 @@
 
 ## Supported versions
 
-Security updates are provided for the latest stable minor release. Older images
-remain immutable for reproducibility but may no longer receive rebuilt base-image
-or toolchain patches.
+Security fixes are released for the latest stable version. Older image digests
+remain available but do not receive rebuilt operating-system or toolchain
+updates.
 
-## Reporting a vulnerability
+## Report a vulnerability
 
-Use GitHub's private vulnerability reporting form:
+Use [GitHub private vulnerability reporting](https://github.com/tinkerfin-ai/sandbox-runtime/security/advisories/new).
+Include the affected image digest, architecture, reproduction steps, and impact.
+Do not publish unpatched vulnerabilities or include credentials or user data.
 
-https://github.com/tinkerfin-ai/sandbox-runtime/security/advisories/new
-
-Include the affected image digest, architecture, reproduction steps, and expected
-impact. Do not open a public issue for an unpatched vulnerability and do not
-include credentials or customer data.
-
-A maintainer will acknowledge a complete report within five business days and
-coordinate disclosure after a fixed image is available. Runtime isolation is
-provided by the configured container or sandbox platform; this image does not
-replace host-level isolation, network policy, resource limits, or secret
-management.
+This image supplies a user-space runtime. Container isolation, network policy,
+resource limits, and secret management remain the responsibility of the sandbox
+platform and its operator.

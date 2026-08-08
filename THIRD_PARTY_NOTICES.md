@@ -1,25 +1,21 @@
 # Third-party notices
 
-The runtime combines software distributed by multiple upstream projects. Each
-component remains under its own license.
+Each bundled component remains subject to its upstream license.
 
-| Component | Upstream | Primary license |
+| Component | Project | Primary license |
 | --- | --- | --- |
-| Debian | https://www.debian.org/ | Package-specific free software licenses |
-| CPython | https://www.python.org/ | Python Software Foundation License |
-| OpenJDK | https://openjdk.org/ | GPL-2.0 with Classpath Exception |
-| Node.js | https://nodejs.org/ | MIT |
-| npm CLI | https://github.com/npm/cli | Artistic-2.0 |
-| Go | https://go.dev/ | BSD-3-Clause |
-| Apache Maven | https://maven.apache.org/ | Apache-2.0 |
-| NumPy | https://numpy.org/ | BSD-3-Clause |
-| pandas | https://pandas.pydata.org/ | BSD-3-Clause |
-| Matplotlib | https://matplotlib.org/ | Matplotlib License |
-| Requests | https://requests.readthedocs.io/ | Apache-2.0 |
-| Beautiful Soup | https://www.crummy.com/software/BeautifulSoup/ | MIT |
+| Debian | [debian.org](https://www.debian.org/) | Package-specific |
+| CPython | [python.org](https://www.python.org/) | PSF License |
+| OpenJDK | [openjdk.org](https://openjdk.org/) | GPL-2.0 with Classpath Exception |
+| Node.js | [nodejs.org](https://nodejs.org/) | MIT |
+| npm CLI | [github.com/npm/cli](https://github.com/npm/cli) | Artistic-2.0 |
+| Go | [go.dev](https://go.dev/) | BSD-3-Clause |
+| Apache Maven | [maven.apache.org](https://maven.apache.org/) | Apache-2.0 |
+| NumPy | [numpy.org](https://numpy.org/) | BSD-3-Clause |
+| pandas | [pandas.pydata.org](https://pandas.pydata.org/) | BSD-3-Clause |
+| Matplotlib | [matplotlib.org](https://matplotlib.org/) | Matplotlib License |
+| Requests | [requests.readthedocs.io](https://requests.readthedocs.io/) | Apache-2.0 |
+| Beautiful Soup | [crummy.com/software/BeautifulSoup](https://www.crummy.com/software/BeautifulSoup/) | MIT |
 
-This table highlights direct components and is not a substitute for the complete
-dependency inventory. Every release publishes a platform-aware SBOM as an OCI
-attestation. Debian package copyright files remain available under
-`/usr/share/doc/*/copyright`, and language distributions retain their upstream
-license files.
+Release images include a platform-specific SBOM attestation. Package copyright
+files are available under `/usr/share/doc/*/copyright` in the image.

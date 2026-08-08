@@ -1,34 +1,22 @@
 # Contributing
 
-Contributions should keep the image reusable across OpenSandbox consumers and
-both published architectures. Business files, credentials, private package
-mirrors, and application-specific caches are out of scope.
+Issues and pull requests are welcome. Changes must support both `linux/amd64`
+and `linux/arm64` and keep the image free of application files, credentials,
+private registries, and business-specific dependencies.
 
-## Development workflow
+## Pull requests
 
-1. Update a version and its checksums in `versions.env`.
-2. Keep the matching Dockerfile defaults synchronized so direct Buildx builds
-   remain predictable.
-3. When Python requirements change, run `make lock` and review every resolved
-   package.
-4. Run `make verify`, ShellCheck, and `make smoke` before opening a pull request.
-5. Describe image-size and startup-time changes in the pull request.
+1. Update toolchain versions and archive checksums in `versions.env`.
+2. If Python dependencies change, run `make lock` and review the resolved lock
+   file.
+3. Add or update a runtime smoke test for behavior changes.
+4. Run the checks below and include relevant size or compatibility changes in
+   the pull request.
 
-Changes must not introduce a second version of a language runtime. A new default
-package belongs in the image only when it is broadly useful, versionable, and
-covered by the runtime smoke test.
+```bash
+make verify
+make smoke IMAGE=sandbox-runtime:dev
+```
 
-## Releases
-
-Maintainers publish releases from signed semantic-version tags. Pre-releases use
-tags such as `v0.1.0-rc.1`; stable releases use tags such as `v0.1.0`. The release
-workflow builds one OCI index, attaches SBOM and provenance attestations, scans
-the resulting digest, and signs it with GitHub Actions keyless identity.
-
-GHCR creates the package as private on its first publish. An organization owner
-must change the package to Public once in the package settings UI; GitHub's
-public Packages REST API does not expose that visibility update. The release
-workflow performs an anonymous digest inspection after publishing and fails if
-the package is not publicly readable.
-
-Published version tags are immutable. A correction requires a new version.
+Published version tags are immutable. Fixes are released under a new semantic
+version.

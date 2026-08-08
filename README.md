@@ -1,58 +1,47 @@
 # TinkerFin Sandbox Runtime
 
+[简体中文](README.zh-CN.md)
+
 [![CI](https://github.com/tinkerfin-ai/sandbox-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/tinkerfin-ai/sandbox-runtime/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-A compact, multi-architecture Linux runtime image for
-[OpenSandbox](https://github.com/alibaba/OpenSandbox) and general-purpose coding
-agents. The image provides one maintained version of each language toolchain and
-starts without creating a virtual environment or downloading common Python
-packages.
+A multi-architecture Linux image for OpenSandbox and coding agents. It ships a
+single version of each supported toolchain and a ready-to-use Python environment,
+so sandbox startup does not need to download common dependencies.
 
-## Included toolchains
-
-| Toolchain | Version | Stable location |
-| --- | --- | --- |
-| Python | 3.11.15 | `/opt/sandbox-runtime/python` |
-| Python virtual environment | 3.11 | `/opt/sandbox-runtime/venv` |
-| OpenJDK | 21 | `/opt/sandbox-runtime/jdk` |
-| Node.js | 22.23.2 | `/opt/sandbox-runtime/node` |
-| npm | 10.9.9 | `/opt/sandbox-runtime/node` |
-| Go | 1.25.7 | `/opt/sandbox-runtime/go` |
-| Apache Maven | 3.9.9 | `/opt/sandbox-runtime/maven` |
-
-The Python environment includes NumPy, pandas, Matplotlib, Requests, and
-Beautiful Soup. Bash, GCC/G++, Make, Git, curl, jq, ripgrep, and common archive
-tools are also available. Matplotlib defaults to the non-interactive `Agg`
-backend.
-
-Maven 3.9.9 is intentionally used instead of Maven 4. The image does not seed
-the Maven local repository, so application artifacts remain a consumer-owned
-cache and are never baked into the public runtime.
-
-## Platforms
-
-Published OCI indexes contain:
-
-- `linux/amd64` for x86-64 Linux and Intel Mac Docker hosts
-- `linux/arm64` for ARM64 Linux and Apple Silicon Docker hosts
-
-Containers always run Linux. There is no Darwin container format; Docker Desktop
-selects the matching Linux image automatically on macOS.
-
-## Use the image
-
-After the first public release:
+## Quick start
 
 ```bash
 docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.0 python --version
 docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.0 mvn --version
 ```
 
-Use an immutable manifest digest in production. Version tags are immutable, and
-the project intentionally does not publish a mutable `latest` tag.
+Use a release tag for evaluation and pin the OCI manifest digest in production.
+Version tags are immutable; no `latest` tag is published.
 
-For OpenSandbox 0.1.x, pass the runtime entrypoint as the sandbox command:
+## Runtime
+
+| Component | Version |
+| --- | --- |
+| Python | 3.11.15 |
+| OpenJDK | 21 |
+| Node.js / npm | 22.23.2 / 10.9.9 |
+| Go | 1.25.7 |
+| Apache Maven | 3.9.9 |
+
+Python packages are installed in `/opt/sandbox-runtime/venv`: NumPy, pandas,
+Matplotlib, Requests, and Beautiful Soup. The image also includes Bash, GCC/G++,
+Make, Git, curl, jq, ripgrep, and common archive tools. Matplotlib uses the `Agg`
+backend by default.
+
+The published OCI index supports `linux/amd64` and `linux/arm64`. Docker Desktop
+selects the matching Linux image on Intel and Apple Silicon Macs. The image is
+about 0.5 GB compressed per platform and 1.44 GB unpacked.
+
+## OpenSandbox
+
+OpenSandbox 0.1.x requires the image entrypoint to be passed when a sandbox is
+created:
 
 ```python
 from datetime import timedelta
@@ -66,45 +55,40 @@ sandbox = SandboxSync.create(
 )
 ```
 
-The fixed runtime environment is declared in the image. When OpenSandbox
-provides an `EXECD_ENVS` file, the entrypoint synchronizes the same allowlisted
-values without deleting consumer-defined keys.
+The runtime environment is built into the image. The entrypoint also propagates
+the supported values through OpenSandbox's `EXECD_ENVS` file when it is present.
+Application files, credentials, skills, and business-specific dependencies must
+be supplied by the consumer.
 
-## Package mirrors and proxies
+## Package sources
 
-Official registries are the defaults. Override them at container or sandbox
-creation time when a deployment needs a regional mirror:
+Official registries are used by default. Deployments can override them at
+runtime:
 
-| Ecosystem | Override |
+| Ecosystem | Configuration |
 | --- | --- |
 | Python | `PIP_INDEX_URL` |
 | Node.js | `NPM_CONFIG_REGISTRY` |
 | Go | `GOPROXY` |
-| Maven | Mount or create `/root/.m2/settings.xml` |
+| Maven | `/root/.m2/settings.xml` |
 
-Do not bake credentials into a derived image. Inject short-lived credentials at
-runtime and keep business-specific setup in a consumer initializer.
+Do not store registry credentials in derived images.
 
-## Build and test
+## Build and verify
 
-Docker Buildx and `uv` are required for a full development workflow:
+Docker Buildx is required. Install [`uv`](https://docs.astral.sh/uv/) only when
+regenerating the Python lock file.
 
 ```bash
 make verify
-make lock
 make build IMAGE=sandbox-runtime:dev
 make smoke IMAGE=sandbox-runtime:dev
+make lock
 ```
 
-`versions.env` is the source of toolchain versions and upstream archive hashes.
-The Python dependency graph is fully pinned with hashes in `requirements.lock`.
+Toolchain versions and archive checksums are defined in `versions.env`.
+Python dependencies are fully pinned with hashes in `requirements.lock`.
 
-## Scope
-
-This repository owns only the reusable operating environment. It does not contain
-skills, agent instructions, customer files, application source, or business
-dependencies. Consumers can run their own idempotent initializer after sandbox
-creation for those concerns.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for maintenance and verification rules and
-[SECURITY.md](SECURITY.md) for vulnerability reporting.
+See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for project policies and
+dependency notices.
