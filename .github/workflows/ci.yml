@@ -68,9 +68,15 @@ jobs:
             NPM_VERSION=${{ env.NPM_VERSION }}
             GO_VERSION=${{ env.GO_VERSION }}
             MAVEN_VERSION=${{ env.MAVEN_VERSION }}
+            SETUPTOOLS_VERSION=${{ env.SETUPTOOLS_VERSION }}
+            NPM_BRACE_EXPANSION_VERSION=${{ env.NPM_BRACE_EXPANSION_VERSION }}
+            NPM_IP_ADDRESS_VERSION=${{ env.NPM_IP_ADDRESS_VERSION }}
             NODE_SHA256_AMD64=${{ env.NODE_SHA256_AMD64 }}
             NODE_SHA256_ARM64=${{ env.NODE_SHA256_ARM64 }}
             NPM_SHA512=${{ env.NPM_SHA512 }}
+            NPM_BRACE_EXPANSION_SHA512=${{ env.NPM_BRACE_EXPANSION_SHA512 }}
+            NPM_IP_ADDRESS_SHA512=${{ env.NPM_IP_ADDRESS_SHA512 }}
+            SETUPTOOLS_SHA256=${{ env.SETUPTOOLS_SHA256 }}
             GO_SHA256_AMD64=${{ env.GO_SHA256_AMD64 }}
             GO_SHA256_ARM64=${{ env.GO_SHA256_ARM64 }}
             BUILD_DATE=${{ env.BUILD_DATE }}
@@ -79,10 +85,23 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
       - name: Run runtime smoke test
         run: ./tests/runtime-smoke.sh sandbox-runtime:ci-${{ matrix.arch }}
-      - name: Scan critical vulnerabilities
+      - name: Report high and critical vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: sandbox-runtime:ci-${{ matrix.arch }}
+          exit-code: "0"
+          ignore-unfixed: false
+          severity: CRITICAL,HIGH
+          scanners: vuln
+          vuln-type: os,library
+          version: v0.70.0
+      - name: Block fixable high and critical vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: sandbox-runtime:ci-${{ matrix.arch }}
           exit-code: "1"
           ignore-unfixed: true
-          severity: CRITICAL
+          severity: CRITICAL,HIGH
+          scanners: vuln
+          vuln-type: os,library
+          version: v0.70.0

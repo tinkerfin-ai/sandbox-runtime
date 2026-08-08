@@ -12,12 +12,12 @@ so sandbox startup does not need to download common dependencies.
 ## Quick start
 
 ```bash
-docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.0 python --version
-docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.0 mvn --version
+docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.1 python --version
+docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.1 mvn --version
 ```
 
 Use a release tag for evaluation and pin the OCI manifest digest in production.
-Version tags are immutable; no `latest` tag is published.
+Exact version tags are immutable. Do not use `latest` as an update channel.
 
 ## Runtime
 
@@ -25,8 +25,8 @@ Version tags are immutable; no `latest` tag is published.
 | --- | --- |
 | Python | 3.11.15 |
 | OpenJDK | 21 |
-| Node.js / npm | 22.23.2 / 10.9.9 |
-| Go | 1.25.7 |
+| Node.js / npm | 22.23.2 / 12.0.2 |
+| Go | 1.25.12 |
 | Apache Maven | 3.9.9 |
 
 Python packages are installed in `/opt/sandbox-runtime/venv`: NumPy, pandas,
@@ -49,7 +49,7 @@ from datetime import timedelta
 from opensandbox import SandboxSync
 
 sandbox = SandboxSync.create(
-    "ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.0",
+    "ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.1",
     entrypoint=["/opt/sandbox-runtime/bin/entrypoint.sh"],
     timeout=timedelta(hours=2),
 )
