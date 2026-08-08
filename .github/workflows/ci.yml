@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SUPPORTED_PLATFORMS: linux/amd64,linux/arm64
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Verify repository contracts
+        run: make verify
+      - name: Run ShellCheck
+        run: shellcheck scripts/*.sh tests/*.sh
+
+  image:
+    needs: contracts
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+          - platform: linux/arm64
+            arch: arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Load locked versions
+        run: cat versions.env >>"${GITHUB_ENV}"
+      - name: Record build metadata
+        run: |
+          printf 'BUILD_DATE=%s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >>"${GITHUB_ENV}"
+          printf 'VCS_REF=%s\n' "${GITHUB_SHA}" >>"${GITHUB_ENV}"
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Build test image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          load: true
+          platforms: ${{ matrix.platform }}
+          tags: sandbox-runtime:ci-${{ matrix.arch }}
+          build-args: |
+            PYTHON_IMAGE=${{ env.PYTHON_IMAGE }}
+            RUNTIME_VERSION=${{ env.RUNTIME_VERSION }}
+            PYTHON_VERSION=${{ env.PYTHON_VERSION }}
+            JAVA_VERSION=${{ env.JAVA_VERSION }}
+            NODE_VERSION=${{ env.NODE_VERSION }}
+            GO_VERSION=${{ env.GO_VERSION }}
+            MAVEN_VERSION=${{ env.MAVEN_VERSION }}
+            NODE_SHA256_AMD64=${{ env.NODE_SHA256_AMD64 }}
+            NODE_SHA256_ARM64=${{ env.NODE_SHA256_ARM64 }}
+            GO_SHA256_AMD64=${{ env.GO_SHA256_AMD64 }}
+            GO_SHA256_ARM64=${{ env.GO_SHA256_ARM64 }}
+            BUILD_DATE=${{ env.BUILD_DATE }}
+            VCS_REF=${{ env.VCS_REF }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+      - name: Run runtime smoke test
+        run: ./tests/runtime-smoke.sh sandbox-runtime:ci-${{ matrix.arch }}
+      - name: Scan critical vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: sandbox-runtime:ci-${{ matrix.arch }}
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: CRITICAL
