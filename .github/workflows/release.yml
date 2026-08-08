@@ -98,6 +98,28 @@ jobs:
           exit-code: "1"
           ignore-unfixed: true
           severity: CRITICAL
+      - name: Make package public
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method PATCH \
+            "/orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/sandbox-runtime" \
+            --field visibility=public >/dev/null
+      - name: Verify anonymous image access
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          anonymous_docker_config=$(mktemp -d)
+          trap 'rm -rf -- "${anonymous_docker_config}"' EXIT
+          for attempt in {1..10}; do
+            if docker --config "${anonymous_docker_config}" buildx imagetools inspect \
+              "${IMAGE_NAME}@${DIGEST}" >/dev/null; then
+              exit 0
+            fi
+            printf 'anonymous pull check attempt %s failed; retrying\n' "${attempt}" >&2
+            sleep 2
+          done
+          exit 1
       - name: Record immutable digest
         env:
           DIGEST: ${{ steps.build.outputs.digest }}

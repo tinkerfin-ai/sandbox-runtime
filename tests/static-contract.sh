@@ -68,6 +68,8 @@ assert_contains Dockerfile 'ENTRYPOINT \["/opt/sandbox-runtime/bin/entrypoint.sh
 assert_contains apt.conf 'Acquire::Retries "5";'
 assert_contains .github/workflows/ci.yml 'linux/amd64,linux/arm64'
 assert_contains .github/workflows/release.yml 'ghcr.io/tinkerfin-ai/sandbox-runtime'
+assert_contains .github/workflows/release.yml 'visibility=public'
+assert_contains .github/workflows/release.yml 'Verify anonymous image access'
 
 for package in numpy pandas matplotlib requests beautifulsoup4; do
     assert_contains requirements.in "^${package}=="
