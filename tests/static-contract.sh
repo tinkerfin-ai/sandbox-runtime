@@ -68,8 +68,11 @@ assert_contains Dockerfile 'ENTRYPOINT \["/opt/sandbox-runtime/bin/entrypoint.sh
 assert_contains apt.conf 'Acquire::Retries "5";'
 assert_contains .github/workflows/ci.yml 'linux/amd64,linux/arm64'
 assert_contains .github/workflows/release.yml 'ghcr.io/tinkerfin-ai/sandbox-runtime'
-assert_contains .github/workflows/release.yml 'visibility=public'
 assert_contains .github/workflows/release.yml 'Verify anonymous image access'
+if rg --quiet 'visibility=public|Make package public' \
+    "${REPO_ROOT}/.github/workflows/release.yml"; then
+    fail "release workflow must not rely on unsupported package visibility API"
+fi
 
 runtime_install_line=$(rg --line-number --max-count 1 '^RUN python -m venv' \
     "${REPO_ROOT}/Dockerfile" | cut -d: -f1)

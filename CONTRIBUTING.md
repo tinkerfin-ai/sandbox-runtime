@@ -25,4 +25,10 @@ tags such as `v0.1.0-rc.1`; stable releases use tags such as `v0.1.0`. The relea
 workflow builds one OCI index, attaches SBOM and provenance attestations, scans
 the resulting digest, and signs it with GitHub Actions keyless identity.
 
+GHCR creates the package as private on its first publish. An organization owner
+must change the package to Public once in the package settings UI; GitHub's
+public Packages REST API does not expose that visibility update. The release
+workflow performs an anonymous digest inspection after publishing and fails if
+the package is not publicly readable.
+
 Published version tags are immutable. A correction requires a new version.

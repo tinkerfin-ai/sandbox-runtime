@@ -98,13 +98,6 @@ jobs:
           exit-code: "1"
           ignore-unfixed: true
           severity: CRITICAL
-      - name: Make package public
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh api --method PATCH \
-            "/orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/sandbox-runtime" \
-            --field visibility=public >/dev/null
       - name: Verify anonymous image access
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
