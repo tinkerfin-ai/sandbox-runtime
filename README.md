@@ -6,14 +6,14 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 A multi-architecture Linux image for OpenSandbox and coding agents. It ships a
-single version of each supported toolchain and a ready-to-use Python environment,
-so sandbox startup does not need to download common dependencies.
+single version of each supported toolchain, headless Chromium, and a ready-to-use
+Python environment, so sandbox startup does not need to download common dependencies.
 
 ## Quick start
 
 ```bash
-docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.1 python --version
-docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.1 mvn --version
+docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.2 python --version
+docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.2 mvn --version
 ```
 
 Use a release tag for evaluation and pin the OCI manifest digest in production.
@@ -26,22 +26,26 @@ Exact version tags are immutable. Do not use `latest` as an update channel.
 | Python | 3.11.15 |
 | OpenJDK | 21 |
 | Node.js / npm | 22.23.2 / 12.0.2 |
-| Go | 1.25.12 |
+| Go | 1.25.13 |
 | Apache Maven | 3.9.9 |
+| Playwright for Python | 1.62.0 |
+| Chromium headless shell | Playwright revision 1234 |
 
 Python packages are installed in `/opt/sandbox-runtime/venv`: NumPy, pandas,
-Matplotlib, Requests, and Beautiful Soup. The image also includes Bash, GCC/G++,
-Make, Git, curl, jq, ripgrep, and common archive tools. Matplotlib uses the `Agg`
+Matplotlib, Requests, Beautiful Soup, and Playwright. The Chromium headless
+shell is preinstalled in `/opt/sandbox-runtime/browsers`;
+`PLAYWRIGHT_BROWSERS_PATH` selects this shared directory. Browser automation and
+screenshots work without downloading browser binaries at sandbox startup.
+The image also includes Bash, GCC/G++, Make, Git, curl, jq, ripgrep, and common archive tools. Matplotlib uses the `Agg`
 backend by default.
 
 The published OCI index supports `linux/amd64` and `linux/arm64`. Docker Desktop
 selects the matching Linux image on Intel and Apple Silicon Macs. The image is
-about 0.5 GB compressed per platform and 1.44 GB unpacked.
+about 2.2–2.3 GB unpacked per platform, including browser binaries.
 
 ## OpenSandbox
 
-OpenSandbox 0.1.x requires the image entrypoint to be passed when a sandbox is
-created:
+Pass the image entrypoint when creating a sandbox with the OpenSandbox SDK:
 
 ```python
 from datetime import timedelta
@@ -49,7 +53,7 @@ from datetime import timedelta
 from opensandbox import SandboxSync
 
 sandbox = SandboxSync.create(
-    "ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.1",
+    "ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.2",
     entrypoint=["/opt/sandbox-runtime/bin/entrypoint.sh"],
     timeout=timedelta(hours=2),
 )
@@ -88,6 +92,10 @@ make lock
 
 Toolchain versions and archive checksums are defined in `versions.env`.
 Python dependencies are fully pinned with hashes in `requirements.lock`.
+The runtime smoke test checks existing toolchains and launches headless Chromium
+with networking disabled to verify JavaScript interaction and PNG screenshots.
+Use Playwright's default `chromium.launch(headless=True)`; headed browser sessions
+and explicit full-browser channels require a separately supplied browser.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for project policies and

@@ -15,7 +15,15 @@ Each bundled component remains subject to its upstream license.
 | pandas | [pandas.pydata.org](https://pandas.pydata.org/) | BSD-3-Clause |
 | Matplotlib | [matplotlib.org](https://matplotlib.org/) | Matplotlib License |
 | Requests | [requests.readthedocs.io](https://requests.readthedocs.io/) | Apache-2.0 |
+| Playwright | [playwright.dev](https://playwright.dev/) | Apache-2.0 |
+| Chromium | [chromium.org](https://www.chromium.org/) | BSD-style and bundled component licenses |
+| greenlet | [greenlet.readthedocs.io](https://greenlet.readthedocs.io/) | MIT and PSF License |
+| pyee | [pyee.readthedocs.io](https://pyee.readthedocs.io/) | MIT |
 | Beautiful Soup | [crummy.com/software/BeautifulSoup](https://www.crummy.com/software/BeautifulSoup/) | MIT |
 
 Release images include a platform-specific SBOM attestation. Package copyright
 files are available under `/usr/share/doc/*/copyright` in the image.
+
+Chromium bundles third-party components with their own license notices. Browser
+artifacts and notices are installed under `/opt/sandbox-runtime/browsers`;
+Playwright notices are included with the Python package in the runtime environment.

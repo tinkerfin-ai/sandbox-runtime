@@ -99,6 +99,8 @@ jobs:
             SETUPTOOLS_VERSION=${{ env.SETUPTOOLS_VERSION }}
             NPM_BRACE_EXPANSION_VERSION=${{ env.NPM_BRACE_EXPANSION_VERSION }}
             NPM_IP_ADDRESS_VERSION=${{ env.NPM_IP_ADDRESS_VERSION }}
+            NPM_TAR_VERSION=${{ env.NPM_TAR_VERSION }}
+            NPM_TAR_SHA512=${{ env.NPM_TAR_SHA512 }}
             NODE_SHA256_AMD64=${{ env.NODE_SHA256_AMD64 }}
             NODE_SHA256_ARM64=${{ env.NODE_SHA256_ARM64 }}
             NPM_SHA512=${{ env.NPM_SHA512 }}

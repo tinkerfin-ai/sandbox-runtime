@@ -54,6 +54,7 @@ required_files=(
     pip.conf
     scripts/entrypoint.sh
     tests/runtime-smoke.sh
+    tests/browser-smoke.py
     .github/workflows/ci.yml
     .github/workflows/release.yml
     LICENSE
@@ -75,7 +76,7 @@ npm_patch=${NPM_VERSION##*.}
 ((10#${npm_patch} >= 2)) || fail "npm must include security fixes from 12.0.2"
 [[ ${GO_VERSION} =~ ^1\.25\.[0-9]+$ ]] || fail "Go must stay on 1.25"
 go_patch=${GO_VERSION##*.}
-((10#${go_patch} >= 12)) || fail "Go must include security fixes from 1.25.12"
+((10#${go_patch} >= 13)) || fail "Go must include security fixes from 1.25.13"
 [[ ${MAVEN_VERSION} =~ ^3\.9\.[0-9]+$ ]] || fail "Maven must stay on 3.9"
 [[ ${SETUPTOOLS_VERSION:-} =~ ^84\.0\.[0-9]+$ ]] \
     || fail "setuptools must include fixed vendored dependencies from 84.0"
@@ -83,6 +84,8 @@ go_patch=${GO_VERSION##*.}
     || fail "npm brace-expansion must include security fixes from 5.0.9"
 [[ ${NPM_IP_ADDRESS_VERSION:-} == 10.3.1 ]] \
     || fail "npm ip-address must include security fixes from 10.3.1"
+[[ ${NPM_TAR_VERSION:-} == 7.5.21 ]] || fail "npm tar must include security fixes from 7.5.21"
+[[ ${NPM_TAR_SHA512:-} =~ ^[0-9a-f]{128}$ ]] || fail "tar SHA-512 is invalid"
 [[ ${NPM_SHA512} =~ ^[0-9a-f]{128}$ ]] || fail "npm SHA-512 is invalid"
 [[ ${NPM_BRACE_EXPANSION_SHA512:-} =~ ^[0-9a-f]{128}$ ]] \
     || fail "brace-expansion SHA-512 is invalid"
@@ -94,6 +97,8 @@ go_patch=${GO_VERSION##*.}
 [[ ${GO_SHA256_ARM64} =~ ^[0-9a-f]{64}$ ]] || fail "Go arm64 SHA-256 is invalid"
 
 assert_contains Dockerfile 'VIRTUAL_ENV=/opt/sandbox-runtime/venv'
+assert_contains Dockerfile 'PLAYWRIGHT_BROWSERS_PATH=/opt/sandbox-runtime/browsers'
+assert_contains Dockerfile 'playwright install --with-deps --only-shell chromium'
 assert_contains Dockerfile 'JAVA_HOME=/opt/sandbox-runtime/jdk'
 assert_contains Dockerfile 'GOROOT=/opt/sandbox-runtime/go'
 assert_contains Dockerfile 'MAVEN_HOME=/opt/sandbox-runtime/maven'
@@ -159,7 +164,7 @@ image_label_line=$(rg --line-number --max-count 1 \
 [[ ${runtime_install_line} -lt ${image_label_line} ]] \
     || fail "volatile image labels must follow runtime installation for cache reuse"
 
-for package in numpy pandas matplotlib requests beautifulsoup4; do
+for package in numpy pandas matplotlib requests beautifulsoup4 playwright; do
     assert_contains requirements.in "^${package}=="
 done
 

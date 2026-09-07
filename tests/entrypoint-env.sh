@@ -30,6 +30,7 @@ run_entrypoint() {
     GOROOT='/runtime/go' \
     MAVEN_HOME='/runtime/maven' \
     MPLBACKEND='Agg' \
+    PLAYWRIGHT_BROWSERS_PATH='/runtime/browsers' \
     LANG='C.UTF-8' \
     PIP_INDEX_URL='https://pypi.example/simple' \
         "${ENTRYPOINT}" sh -c 'printf command-executed'
@@ -38,7 +39,7 @@ run_entrypoint() {
 [[ $(run_entrypoint) == 'command-executed' ]] || fail "command was not executed"
 [[ $(run_entrypoint) == 'command-executed' ]] || fail "second command was not executed"
 
-for key in PATH VIRTUAL_ENV JAVA_HOME GOROOT MAVEN_HOME MPLBACKEND LANG PIP_INDEX_URL; do
+for key in PATH VIRTUAL_ENV JAVA_HOME GOROOT MAVEN_HOME MPLBACKEND PLAYWRIGHT_BROWSERS_PATH LANG PIP_INDEX_URL; do
     [[ $(rg --count "^${key}=" "${EXECD_ENV_FILE}") -eq 1 ]] \
         || fail "${key} was not upserted exactly once"
 done
