@@ -18,5 +18,8 @@ make verify
 make smoke IMAGE=sandbox-runtime:dev
 ```
 
+CI builds and runs the browser smoke test on a native runner for each target
+architecture. Docker Desktop selects the matching platform for local smoke tests.
+
 Published version tags are immutable. Fixes are released under a new semantic
 version.

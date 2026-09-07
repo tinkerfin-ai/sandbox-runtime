@@ -134,6 +134,8 @@ assert_before .github/workflows/release.yml \
 assert_before .github/workflows/release.yml \
     'Upload image digest' 'Create and publish OCI index'
 for workflow in .github/workflows/ci.yml .github/workflows/release.yml; do
+    assert_contains "${workflow}" 'runner: ubuntu-24.04-arm'
+    assert_contains "${workflow}" 'Verify native runner architecture'
     [[ $(rg --count 'severity: CRITICAL,HIGH' "${REPO_ROOT}/${workflow}") -eq 2 ]] \
         || fail "${workflow} must report and gate high and critical vulnerabilities"
     [[ $(rg --count 'ignore-unfixed: false' "${REPO_ROOT}/${workflow}") -eq 1 ]] \
