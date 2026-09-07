@@ -3,3 +3,28 @@
 *.tar
 *.tar.gz
 *.tar.xz
+
+# OS metadata and editor state
+.DS_Store
+.DS_STORE
+._*
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local Python environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Local credentials; keep shareable examples
+.env
+.env.*
+!.env.example

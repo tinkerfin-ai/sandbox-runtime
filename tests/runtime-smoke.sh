@@ -2,8 +2,11 @@
 
 set -Eeuo pipefail
 
+REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly REPO_ROOT
+
 readonly IMAGE_REF=${1:?usage: tests/runtime-smoke.sh IMAGE_REF}
-readonly MAX_UNPACKED_BYTES=${MAX_UNPACKED_BYTES:-2000000000}
+readonly MAX_UNPACKED_BYTES=${MAX_UNPACKED_BYTES:-2500000000}
 
 container_id=
 
@@ -40,6 +43,7 @@ docker exec "${container_id}" bash -Eeuo pipefail -c '
     rg --quiet "^NODE_HOME=/opt/sandbox-runtime/node$" /tmp/execd.env
     rg --quiet "^GOROOT=/opt/sandbox-runtime/go$" /tmp/execd.env
     rg --quiet "^MAVEN_HOME=/opt/sandbox-runtime/maven$" /tmp/execd.env
+    rg --quiet "^PLAYWRIGHT_BROWSERS_PATH=/opt/sandbox-runtime/browsers$" /tmp/execd.env
 '
 docker rm --force "${container_id}" >/dev/null
 container_id=
@@ -83,6 +87,9 @@ PY
     test "$(node -p \
         "require(\"/opt/sandbox-runtime/node/lib/node_modules/npm/node_modules/ip-address/package.json\").version")" \
         = 10.3.1
+    test "$(node -p \
+        "require(\"/opt/sandbox-runtime/node/lib/node_modules/npm/node_modules/tar/package.json\").version")" \
+        = 7.5.21
     node - <<"JS"
 const assert = require("node:assert/strict");
 const npmModules = "/opt/sandbox-runtime/node/lib/node_modules/npm/node_modules";
@@ -117,5 +124,8 @@ JS
     cc /tmp/main.c -o /tmp/c-smoke
     test "$(/tmp/c-smoke)" = c-ok
 '
+
+docker run --rm --interactive --network none "${IMAGE_REF}" python - \
+    <"${REPO_ROOT}/tests/browser-smoke.py"
 
 printf 'runtime smoke passed for %s (%s bytes)\n' "${IMAGE_REF}" "${image_size}"

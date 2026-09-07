@@ -7,22 +7,25 @@ FROM ${PYTHON_IMAGE} AS downloads
 ARG TARGETARCH
 ARG NODE_VERSION=22.23.2
 ARG NPM_VERSION=12.0.2
-ARG GO_VERSION=1.25.12
+ARG GO_VERSION=1.25.13
 ARG SETUPTOOLS_VERSION=84.0.0
 ARG NPM_BRACE_EXPANSION_VERSION=5.0.9
 ARG NPM_IP_ADDRESS_VERSION=10.3.1
+ARG NPM_TAR_VERSION=7.5.21
 ARG NODE_SHA256_AMD64=d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307
 ARG NODE_SHA256_ARM64=fff4078c5def658577f92c88db7db3bc0072924bfb93fe52c1e744a54e94abb8
 ARG NPM_SHA512=b885e890b9418fa1693544d05f53e64f9a73ec194837d4258b15fecdd692347b1dd2a517b1b0cbaf9d31cd8e92c3b70956bd2ecc72833a57b4b3098f5bfa7943
 ARG NPM_BRACE_EXPANSION_SHA512=49c43822ebc8105d533253fb66dfaf8c9ffff7394f6f64837315b13376e4f2ceade8619d27b28ed5d09c4e274e3c929e3d6df42c4ff6713ef00b23e1a3dfd6c6
 ARG NPM_IP_ADDRESS_SHA512=d5ef5dde46fdecd1c94c8243656f6b2aa5b687af9d15ae740f2d1fa4f48c429d800e37b982f2ac5e67622ba770639b7be93693b79f8fe4dd58fcba13a08c4fea
+ARG NPM_TAR_SHA512=5dd86d0af94ccb0c31a425bc604ab794e5c126950f4d1d8e1c77302cf3b71f0b09a8e1dad8e93fa09eebb86ce9f89acaa113d50b327001d123a8b5bfbcd44f1c
 ARG SETUPTOOLS_SHA256=51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670
-ARG GO_SHA256_AMD64=234828b7a89e0e303d2556310ee549fbcf253d28de937bac3da13d6294262ac1
-ARG GO_SHA256_ARM64=8b5884aef89600aef5b0b051fb971f11f49bb996521e911f30f02a66884f7bd2
+ARG GO_SHA256_AMD64=39042a078ea9ceebe3ecda4a7188f0f5b96e14a071d27923ba7f40b456e85ae3
+ARG GO_SHA256_ARM64=adad240fcb6bd180cf973b4b7c747baf4ec81d08b7d40ca35940ee4531971490
 
 SHELL ["/bin/bash", "-Eeuo", "pipefail", "-c"]
 
-RUN apt-get update \
+RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates curl xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
@@ -35,6 +38,7 @@ RUN case "${TARGETARCH}" in \
     && npm_archive="npm-${NPM_VERSION}.tgz" \
     && brace_expansion_archive="brace-expansion-${NPM_BRACE_EXPANSION_VERSION}.tgz" \
     && ip_address_archive="ip-address-${NPM_IP_ADDRESS_VERSION}.tgz" \
+    && npm_tar_archive="npm-tar-${NPM_TAR_VERSION}.tgz" \
     && setuptools_wheel="setuptools-${SETUPTOOLS_VERSION}-py3-none-any.whl" \
     && go_archive="go${GO_VERSION}.linux-${TARGETARCH}.tar.gz" \
     && curl --fail --location --retry 5 --output "/tmp/${node_archive}" \
@@ -50,6 +54,10 @@ RUN case "${TARGETARCH}" in \
     && curl --fail --location --retry 5 --output "/tmp/${ip_address_archive}" \
         "https://registry.npmjs.org/ip-address/-/${ip_address_archive}" \
     && printf '%s  %s\n' "${NPM_IP_ADDRESS_SHA512}" "/tmp/${ip_address_archive}" \
+        | sha512sum --check --strict \
+    && curl --fail --location --retry 5 --output "/tmp/${npm_tar_archive}" \
+        "https://registry.npmjs.org/tar/-/tar-${NPM_TAR_VERSION}.tgz" \
+    && printf '%s  %s\n' "${NPM_TAR_SHA512}" "/tmp/${npm_tar_archive}" \
         | sha512sum --check --strict \
     && curl --fail --location --retry 5 --output /tmp/setuptools.whl \
         "https://files.pythonhosted.org/packages/py3/s/setuptools/${setuptools_wheel}" \
@@ -67,13 +75,20 @@ RUN case "${TARGETARCH}" in \
     && rm -rf \
         "${npm_root}/node_modules/brace-expansion" \
         "${npm_root}/node_modules/ip-address" \
+        "${npm_root}/node_modules/tar" \
     && install -d \
         "${npm_root}/node_modules/brace-expansion" \
         "${npm_root}/node_modules/ip-address" \
+        "${npm_root}/node_modules/tar" \
     && tar --extract --gzip --file "/tmp/${brace_expansion_archive}" \
         --directory "${npm_root}/node_modules/brace-expansion" --strip-components 1 \
     && tar --extract --gzip --file "/tmp/${ip_address_archive}" \
         --directory "${npm_root}/node_modules/ip-address" --strip-components 1 \
+    && tar --extract --gzip --file "/tmp/${npm_tar_archive}" \
+        --directory "${npm_root}/node_modules/tar" --strip-components 1 \
+    && [[ $(/opt/sandbox-runtime/node/bin/node -p \
+            "require('${npm_root}/node_modules/tar/package.json').version") \
+            == "${NPM_TAR_VERSION}" ]] \
     && [[ $(/opt/sandbox-runtime/node/bin/node -p \
             "require('${npm_root}/node_modules/brace-expansion/package.json').version") \
             == "${NPM_BRACE_EXPANSION_VERSION}" ]] \
@@ -85,12 +100,12 @@ RUN case "${TARGETARCH}" in \
 
 FROM ${PYTHON_IMAGE}
 
-ARG RUNTIME_VERSION=0.1.1
+ARG RUNTIME_VERSION=0.1.2
 ARG PYTHON_VERSION=3.11.15
 ARG JAVA_VERSION=21
 ARG NODE_VERSION=22.23.2
 ARG NPM_VERSION=12.0.2
-ARG GO_VERSION=1.25.12
+ARG GO_VERSION=1.25.13
 ARG MAVEN_VERSION=3.9.9
 ARG SETUPTOOLS_VERSION=84.0.0
 ARG VCS_REF=unknown
@@ -105,6 +120,7 @@ ENV VIRTUAL_ENV=/opt/sandbox-runtime/venv \
     GOROOT=/opt/sandbox-runtime/go \
     MAVEN_HOME=/opt/sandbox-runtime/maven \
     MPLBACKEND=Agg \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/sandbox-runtime/browsers \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     PIP_INDEX_URL=https://pypi.org/simple \
@@ -116,7 +132,8 @@ ENV PATH=/opt/sandbox-runtime/venv/bin:/opt/sandbox-runtime/node/bin:/opt/sandbo
 
 COPY apt.conf /etc/apt/apt.conf.d/80-sandbox-runtime
 
-RUN rm -f /etc/apt/apt.conf.d/docker-clean
+RUN rm -f /etc/apt/apt.conf.d/docker-clean \
+    && sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
@@ -184,12 +201,19 @@ RUN --mount=type=bind,from=downloads,source=/tmp/setuptools.whl,target=/tmp/setu
     && [[ $(/usr/local/bin/python -c 'import setuptools; print(setuptools.__version__)') \
         == "${SETUPTOOLS_VERSION}" ]]
 
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update \
+    && apt-get upgrade --yes --no-install-recommends \
+    && python -m playwright install --with-deps --only-shell chromium \
+    && chmod -R a+rX "${PLAYWRIGHT_BROWSERS_PATH}"
+
 COPY --chmod=0755 scripts/entrypoint.sh /opt/sandbox-runtime/bin/entrypoint.sh
 
 WORKDIR /workspace
 STOPSIGNAL SIGTERM
 LABEL org.opencontainers.image.title="TinkerFin Sandbox Runtime" \
-      org.opencontainers.image.description="Multi-architecture OpenSandbox runtime for Python, Java, Node.js, Go, and Maven" \
+      org.opencontainers.image.description="Multi-architecture OpenSandbox runtime for Python, Java, Node.js, Go, Maven, and Chromium" \
       org.opencontainers.image.url="https://github.com/tinkerfin-ai/sandbox-runtime" \
       org.opencontainers.image.source="https://github.com/tinkerfin-ai/sandbox-runtime" \
       org.opencontainers.image.documentation="https://github.com/tinkerfin-ai/sandbox-runtime#readme" \
