@@ -12,8 +12,8 @@
 ## 快速使用
 
 ```bash
-docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.3 python --version
-docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.3 mvn --version
+docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.4 python --version
+docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.4 mvn --version
 ```
 
 测试时可以使用精确版本标签；生产环境应固定 OCI manifest digest。精确版本标签
@@ -51,7 +51,7 @@ from datetime import timedelta
 from opensandbox import SandboxSync
 
 sandbox = SandboxSync.create(
-    "ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.3",
+    "ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.4",
     entrypoint=["/opt/sandbox-runtime/bin/entrypoint.sh"],
     timeout=timedelta(hours=2),
 )
@@ -66,6 +66,9 @@ sandbox = SandboxSync.create(
 服务端为具有额外权限的 execd 父容器启用鉴权，并向可信客户端提供端点认证请求头。
 控制面和原始 execd 接口只能由可信业务代码访问；不可信命令必须使用非 root 隔离会话，
 并显式限制文件系统和网络访问。
+工作区恢复要求 Docker 提供私有、可写的 `overlay` 根文件系统。
+外部存储不得覆盖 `/var/lib/tinkerfin-workspaces`、其父目录或子目录，也不得覆盖隔离控制目录。
+与这些路径无关的挂载不受影响。
 
 ## 软件源配置
 
@@ -90,6 +93,7 @@ make verify
 make build IMAGE=sandbox-runtime:dev
 make smoke IMAGE=sandbox-runtime:dev
 make workspace-test IMAGE=sandbox-runtime:dev
+make workspace-restart-test IMAGE=sandbox-runtime:dev
 make lock
 ```
 
@@ -97,7 +101,9 @@ make lock
 Python 依赖。运行测试覆盖现有工具链，并在断网环境下启动无界面 Chromium，
 验证 JavaScript 交互和 PNG 截图。`make smoke` 还会针对镜像内安装的辅助程序运行
 工作区契约测试；`make workspace-test` 可以单独运行这些测试，覆盖项目存储、
-Python 环境、受控出网与取消。使用 Playwright 默认的 `chromium.launch(headless=True)`；
+Python 环境、受控出网与取消。`make workspace-restart-test` 下载固定的 execd 依赖，
+验证测试容器正常停止或强制终止后再次启动时保留项目数据并拒绝旧会话，且只清理自身创建的测试容器。
+使用 Playwright 默认的 `chromium.launch(headless=True)`；
 有界面运行或显式选择完整浏览器通道时，需要另行提供对应浏览器。
 
 贡献、安全报告和第三方依赖信息请参阅 [CONTRIBUTING.md](CONTRIBUTING.md)、

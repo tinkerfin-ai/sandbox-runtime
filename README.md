@@ -12,8 +12,8 @@ Python environment, so sandbox startup does not need to download common dependen
 ## Quick start
 
 ```bash
-docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.3 python --version
-docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.3 mvn --version
+docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.4 python --version
+docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.4 mvn --version
 ```
 
 Use a release tag for evaluation and pin the OCI manifest digest in production.
@@ -53,7 +53,7 @@ from datetime import timedelta
 from opensandbox import SandboxSync
 
 sandbox = SandboxSync.create(
-    "ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.3",
+    "ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.4",
     entrypoint=["/opt/sandbox-runtime/bin/entrypoint.sh"],
     timeout=timedelta(hours=2),
 )
@@ -72,6 +72,9 @@ authenticates the privileged execd parent and supplies endpoint authentication
 headers to trusted clients. Keep the control plane and raw execd APIs restricted
 to trusted application code. Untrusted commands require non-root isolated
 sessions with explicitly restricted filesystems and networking.
+Workspace recovery requires Docker's private writable `overlay` root filesystem.
+Do not mount external storage over `/var/lib/tinkerfin-workspaces`, its ancestors
+or descendants, or the isolation control directory. Unrelated mounts are allowed.
 
 ## Package sources
 
@@ -97,6 +100,7 @@ make verify
 make build IMAGE=sandbox-runtime:dev
 make smoke IMAGE=sandbox-runtime:dev
 make workspace-test IMAGE=sandbox-runtime:dev
+make workspace-restart-test IMAGE=sandbox-runtime:dev
 make lock
 ```
 
@@ -107,6 +111,9 @@ with networking disabled to verify JavaScript interaction and PNG screenshots.
 `make smoke` also runs the workspace contracts against the helpers installed in
 the image. `make workspace-test` runs those contracts separately, covering project
 storage, Python environments, controlled egress and cancellation.
+`make workspace-restart-test` downloads the pinned execd dependency and verifies
+that owned containers retain project data and reject old sessions after normal
+and forced restarts. It removes only the test containers it creates.
 Use Playwright's default `chromium.launch(headless=True)`; headed browser sessions
 and explicit full-browser channels require a separately supplied browser.
 

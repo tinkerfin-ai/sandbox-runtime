@@ -63,11 +63,17 @@ class ObservationTest(unittest.TestCase):
         self.root = Path(self.directory.name) / "state"
         self.project = sha256(b"project-a").hexdigest()
         self.other = sha256(b"project-b").hexdigest()
-        self.registry = ProjectRegistry(self.root, uid=os.getuid(), gid=os.getgid())
+        self.namespace = str(uuid4())
+        self.registry = ProjectRegistry(
+            self.root,
+            uid=os.getuid(),
+            gid=os.getgid(),
+            session_namespace=self.namespace,
+        )
 
     def reserve(self, project: str):
         prepared = self.registry.prepare(project)
-        owner = SessionOwner(str(uuid4()), str(uuid4()))
+        owner = SessionOwner(str(uuid4()), self.namespace)
         return self.registry.reserve(project, prepared.incarnation, owner)
 
     def test_missing_registry_or_project_is_not_created(self) -> None:
@@ -172,7 +178,7 @@ class ObservationTest(unittest.TestCase):
                     self.registry.reserve(
                         self.project,
                         record.incarnation,
-                        SessionOwner(str(uuid4()), str(uuid4())),
+                        SessionOwner(str(uuid4()), self.namespace),
                     )
                 return descriptor
 
@@ -407,10 +413,18 @@ class SourceTest(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name) / "state"
         self.project = sha256(b"project-a").hexdigest()
-        self.registry = ProjectRegistry(self.root, uid=os.getuid(), gid=os.getgid())
+        self.namespace = str(uuid4())
+        self.registry = ProjectRegistry(
+            self.root,
+            uid=os.getuid(),
+            gid=os.getgid(),
+            session_namespace=self.namespace,
+        )
         prepared = self.registry.prepare(self.project)
         self.record = self.registry.reserve(
-            self.project, prepared.incarnation, SessionOwner(str(uuid4()), str(uuid4()))
+            self.project,
+            prepared.incarnation,
+            SessionOwner(str(uuid4()), self.namespace),
         )
         self.files = (
             self.registry.project_path(self.project, self.record.incarnation) / "files"
@@ -671,7 +685,7 @@ class SourceTest(unittest.IsolatedAsyncioTestCase):
         other = sha256(b"project-b").hexdigest()
         prepared = self.registry.prepare(other)
         self.registry.reserve(
-            other, prepared.incarnation, SessionOwner(str(uuid4()), str(uuid4()))
+            other, prepared.incarnation, SessionOwner(str(uuid4()), self.namespace)
         )
         second = watch._Source(self.root, other, self.budget, watch._DEFAULT_LIMITS)
         self.owned_sources.append(second)
@@ -691,7 +705,7 @@ class SourceTest(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(watch.ProjectObservation, "validate", validate):
             self.registry.reserve(
-                other, prepared.incarnation, SessionOwner(str(uuid4()), str(uuid4()))
+                other, prepared.incarnation, SessionOwner(str(uuid4()), self.namespace)
             )
             for backend in (first_backend, second_backend):
                 backend.emit(
@@ -799,10 +813,18 @@ class HttpTest(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name) / "state"
         self.project = sha256(b"project-a").hexdigest()
-        self.registry = ProjectRegistry(self.root, uid=os.getuid(), gid=os.getgid())
+        self.namespace = str(uuid4())
+        self.registry = ProjectRegistry(
+            self.root,
+            uid=os.getuid(),
+            gid=os.getgid(),
+            session_namespace=self.namespace,
+        )
         prepared = self.registry.prepare(self.project)
         self.record = self.registry.reserve(
-            self.project, prepared.incarnation, SessionOwner(str(uuid4()), str(uuid4()))
+            self.project,
+            prepared.incarnation,
+            SessionOwner(str(uuid4()), self.namespace),
         )
         self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.listener.bind(("127.0.0.1", 0))
@@ -1371,11 +1393,19 @@ class LinuxInotifyIntegrationTest(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory(prefix="tinkerfin-watch-linux-")
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name) / "state"
-        self.registry = ProjectRegistry(self.root, uid=os.getuid(), gid=os.getgid())
+        self.namespace = str(uuid4())
+        self.registry = ProjectRegistry(
+            self.root,
+            uid=os.getuid(),
+            gid=os.getgid(),
+            session_namespace=self.namespace,
+        )
         self.project = sha256(b"project-a").hexdigest()
         prepared = self.registry.prepare(self.project)
         self.record = self.registry.reserve(
-            self.project, prepared.incarnation, SessionOwner(str(uuid4()), str(uuid4()))
+            self.project,
+            prepared.incarnation,
+            SessionOwner(str(uuid4()), self.namespace),
         )
         self.files = (
             self.registry.project_path(self.project, self.record.incarnation) / "files"
@@ -1388,7 +1418,7 @@ class LinuxInotifyIntegrationTest(unittest.TestCase):
 
     def test_active_reservations_and_release_do_not_emit_file_changes(self) -> None:
         tree = self.tree()
-        owner = SessionOwner(str(uuid4()), str(uuid4()))
+        owner = SessionOwner(str(uuid4()), self.namespace)
         self.registry.reserve(self.project, self.record.incarnation, owner)
         self.assertEqual(self.effects(tree), watch._Effects())
         self.observation.validate()

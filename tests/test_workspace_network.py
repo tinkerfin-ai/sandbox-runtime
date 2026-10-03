@@ -183,9 +183,15 @@ class NetworkOwnershipTest(unittest.IsolatedAsyncioTestCase):
                 egress.unix_listener(control_path, 4, mode=0o600) as control,
             ):
                 proxy = egress.EgressProxy(listener, egress.DnsResolver("127.0.0.1"))
-                service = supervise.WorkspaceNetwork(proxy, control)
-                serving = asyncio.create_task(service.serve())
                 owner = {"session_id": str(uuid4()), "session_namespace": str(uuid4())}
+                stopped = supervise.SessionOwner(str(uuid4()), str(uuid4()))
+                service = supervise.WorkspaceNetwork(
+                    proxy,
+                    control,
+                    session_namespace=owner["session_namespace"],
+                    stopped_sessions=(stopped,),
+                )
+                serving = asyncio.create_task(service.serve())
                 try:
                     self.assertEqual(
                         json.loads(
@@ -213,7 +219,7 @@ class NetworkOwnershipTest(unittest.IsolatedAsyncioTestCase):
                                 {"operation": "revoke", **owner}, control_path
                             )
                         ),
-                        {},
+                        {"stopped": False},
                     )
                     self.assertEqual(
                         json.loads(
@@ -232,6 +238,28 @@ class NetworkOwnershipTest(unittest.IsolatedAsyncioTestCase):
                         ),
                         {"error": "denied"},
                     )
+                    for prior in (
+                        stopped,
+                        supervise.SessionOwner(str(uuid4()), stopped.session_namespace),
+                    ):
+                        self.assertEqual(
+                            json.loads(
+                                await network.request(
+                                    {"operation": "grant", **prior.payload()},
+                                    control_path,
+                                )
+                            ),
+                            {"error": "denied"},
+                        )
+                        self.assertEqual(
+                            json.loads(
+                                await network.request(
+                                    {"operation": "revoke", **prior.payload()},
+                                    control_path,
+                                )
+                            ),
+                            {"stopped": prior == stopped},
+                        )
                 finally:
                     serving.cancel()
                     with contextlib.suppress(asyncio.CancelledError):

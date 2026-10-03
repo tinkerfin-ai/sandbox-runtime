@@ -6,9 +6,12 @@ import argparse
 import asyncio
 import json
 import socket
+import sys
 from pathlib import Path
 
-CONTROL_SOCKET = Path("/run/tinkerfin-workspace-egress/control.sock")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from lifetime import CONTROL_SOCKET
 
 
 async def request(payload: dict[str, str], path: Path = CONTROL_SOCKET) -> bytes:

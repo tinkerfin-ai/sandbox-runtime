@@ -106,6 +106,8 @@ jobs:
         run: ./tests/runtime-smoke.sh "sandbox-runtime:ci-${TEST_RUN_ID}"
       - name: Verify workspace helpers installed in the image
         run: make workspace-test IMAGE="sandbox-runtime:ci-${TEST_RUN_ID}"
+      - name: Verify workspace container restarts
+        run: make workspace-restart-test IMAGE="sandbox-runtime:ci-${TEST_RUN_ID}"
       - name: Verify test cleanup on interruption
         run: make runtime-signals IMAGE="sandbox-runtime:ci-${TEST_RUN_ID}"
       - name: Report high and critical vulnerabilities

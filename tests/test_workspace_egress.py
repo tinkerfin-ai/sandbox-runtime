@@ -1182,14 +1182,27 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         with tempfile.TemporaryDirectory(dir="/tmp") as directory:
             path = Path(directory) / "egress.sock"
+            namespace = str(uuid4())
+            startup = (
+                "import sys;sys.path.insert(0,"
+                + repr(str(Path(egress.__file__).resolve().parent))
+                + ")\nfrom pathlib import Path\n"
+                "from unittest.mock import patch, AsyncMock\n"
+                "import lifetime, supervise\nfrom registry import ProjectRegistry\n"
+                "with patch.object(lifetime, '_require_tmpfs'), "
+                "patch.object(lifetime, 'require_private_storage'), "
+                "patch.object(supervise, '_wait_execd_namespace', "
+                f"AsyncMock(return_value={namespace!r})), "
+                "patch.object(supervise, 'ProjectRegistry', "
+                f"side_effect=lambda root, **kwargs: ProjectRegistry(Path({directory!r}) / 'registry', **kwargs)):\n"
+                "    supervise.main()\n"
+            )
             process = await asyncio.create_subprocess_exec(
                 sys.executable,
                 "-I",
                 "-S",
                 "-c",
-                "import runpy,sys;sys.path.insert(0,"
-                + repr(str(Path(egress.__file__).resolve().parent))
-                + ");runpy.run_module('supervise',run_name='__main__')",
+                startup,
                 "--directory",
                 str(path.parent),
                 "--deny-host",
@@ -1209,7 +1222,7 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
                         {
                             "operation": "grant",
                             "session_id": str(uuid4()),
-                            "session_namespace": str(uuid4()),
+                            "session_namespace": namespace,
                         },
                         control,
                     )
@@ -1232,6 +1245,28 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(stdout, b"")
                 self.assertEqual(stderr, b"")
                 self.assertFalse(path.exists())
+                self.assertTrue((path.parent / "lifetime").exists())
+                self.assertFalse((path.parent / "ready").exists())
+                repeated = await asyncio.create_subprocess_exec(
+                    sys.executable,
+                    "-I",
+                    "-S",
+                    "-c",
+                    startup,
+                    "--directory",
+                    str(path.parent),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                try:
+                    stdout, stderr = await repeated.communicate()
+                    self.assertNotEqual(repeated.returncode, 0)
+                    self.assertEqual(stdout, b"")
+                    self.assertIn(b"FileExistsError", stderr)
+                finally:
+                    if repeated.returncode is None:
+                        repeated.kill()
+                        await repeated.communicate()
             finally:
                 if process.returncode is None:
                     process.kill()

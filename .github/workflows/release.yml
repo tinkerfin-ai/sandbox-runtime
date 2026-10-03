@@ -145,6 +145,10 @@ jobs:
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: make workspace-test IMAGE="${IMAGE_NAME}@${DIGEST}"
+      - name: Verify workspace container restarts
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: make workspace-restart-test IMAGE="${IMAGE_NAME}@${DIGEST}"
       - name: Verify test cleanup on interruption
         env:
           DIGEST: ${{ steps.build.outputs.digest }}

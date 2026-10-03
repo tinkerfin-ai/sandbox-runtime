@@ -1,9 +1,11 @@
-"""Own workspace egress for the lifetime of one trusted parent container.
+"""Own workspace admission and egress for one complete container run.
 
 The control socket is never mounted into a workload. Its private parent directory
-and mode restrict admission and revocation to trusted parent commands. A lifetime
-marker prevents restarting this service with an empty cancellation ledger. Egress
-failure terminates the entrypoint, which OpenSandbox bootstrap couples to execd.
+and mode restrict admission and revocation to trusted parent commands. A tmpfs
+marker prevents restarting this service with an empty cancellation ledger until
+the whole container has stopped. Startup retains exact old Run identities as
+termination evidence; an execd namespace change alone never supplies that proof.
+Egress failure terminates the entrypoint, which bootstrap couples to execd.
 File observation fails independently and never terminates the parent command or
 changes file-operation results.
 """
@@ -16,12 +18,13 @@ import contextlib
 import json
 import os
 import socket
-import stat
 import sys
 from collections.abc import Coroutine
 from pathlib import Path
 from typing import cast
+from uuid import UUID
 
+import lifetime
 from egress import (
     DnsResolver,
     EgressProxy,
@@ -33,15 +36,27 @@ from egress import (
     serve_until_signal,
     unix_listener,
 )
+from registry import ProjectRegistry, SessionOwner
 from watch import WorkspaceWatch
 
 
 class WorkspaceNetwork:
     """Retain Run revocations independently of individual control connections."""
 
-    def __init__(self, proxy: EgressProxy, control: socket.socket) -> None:
+    def __init__(
+        self,
+        proxy: EgressProxy,
+        control: socket.socket,
+        *,
+        session_namespace: str,
+        stopped_sessions: tuple[SessionOwner, ...],
+    ) -> None:
         self.proxy = proxy
         self.control = _ConnectionServer(control, 64)
+        self.session_namespace = session_namespace
+        self.stopped_sessions = frozenset(
+            (owner.session_id, owner.session_namespace) for owner in stopped_sessions
+        )
 
     async def serve(self) -> None:
         """Fail the service as a whole if either listener fails."""
@@ -82,13 +97,22 @@ class WorkspaceNetwork:
                         namespace, str
                     ):
                         raise ValueError("Invalid request")
+                    if (
+                        str(UUID(session_id)) != session_id
+                        or str(UUID(namespace)) != namespace
+                    ):
+                        raise ValueError("Invalid Run identity")
                     if operation == "grant":
+                        if namespace != self.session_namespace:
+                            raise Rejected(403)
                         response = {
                             "token": self.proxy.grant_run_egress(session_id, namespace)
                         }
                     elif operation == "revoke":
                         await self.proxy.revoke_run_egress(session_id, namespace)
-                        response = {}
+                        response = {
+                            "stopped": (session_id, namespace) in self.stopped_sessions
+                        }
                     else:
                         raise ValueError("Invalid request")
                 await loop.sock_sendall(
@@ -115,6 +139,64 @@ async def _command(arguments: list[str]) -> None:
         await process.wait()
 
 
+async def _execd_namespace(token: str) -> str:
+    reader, writer = await asyncio.open_connection("127.0.0.1", 44772, limit=8192)
+    try:
+        writer.write(
+            (
+                "GET /v1/isolated/capabilities HTTP/1.0\r\n"
+                "Host: 127.0.0.1\r\nConnection: close\r\n"
+                f"X-EXECD-ACCESS-TOKEN: {token}\r\n\r\n"
+            ).encode("ascii")
+        )
+        await writer.drain()
+        response = bytearray()
+        while True:
+            content = await reader.read(8193 - len(response))
+            if not content:
+                break
+            response.extend(content)
+            if len(response) > 8192:
+                raise RuntimeError("Execd capabilities exceed their byte limit")
+        header, separator, body = response.partition(b"\r\n\r\n")
+        status = header.partition(b"\r\n")[0].split()
+        if (
+            not separator
+            or len(status) < 2
+            or status[0] not in (b"HTTP/1.0", b"HTTP/1.1")
+            or status[1] != b"200"
+        ):
+            raise RuntimeError("Execd capabilities are unavailable")
+        raw: object = json.loads(body)
+        if not isinstance(raw, dict):
+            raise TypeError("Invalid execd capabilities")
+        payload = cast(dict[str, object], raw)
+        namespace = payload.get("session_namespace")
+        if payload.get("available") is not True:
+            raise RuntimeError("Execd isolation is unavailable")
+        if not isinstance(namespace, str) or str(UUID(namespace)) != namespace:
+            raise ValueError("Execd isolation requires a canonical session namespace")
+        return namespace
+    finally:
+        writer.close()
+        await writer.wait_closed()
+
+
+async def _wait_execd_namespace() -> str:
+    """Bound startup readiness without retrying authentication or protocol errors."""
+    token = os.environ.get("EXECD_ACCESS_TOKEN", "")
+    if len(token) != 64 or any(
+        character not in "0123456789abcdef" for character in token
+    ):
+        raise ValueError("Workspace isolation requires authenticated execd access")
+    async with asyncio.timeout(30):
+        while True:
+            try:
+                return await _execd_namespace(token)
+            except ConnectionRefusedError:
+                await asyncio.sleep(0.05)
+
+
 async def _watch_files() -> None:
     await WorkspaceWatch().serve()
 
@@ -138,28 +220,23 @@ async def _with_observation(operation: Coroutine[None, None, None]) -> None:
 def main() -> None:
     """Prepare protected listeners before entering the asynchronous service loop."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--directory", type=Path, default=Path("/run/tinkerfin-workspace-egress")
-    )
+    parser.add_argument("--directory", type=Path, default=lifetime.DIRECTORY)
     parser.add_argument("--deny-host", action="append", default=[])
     parser.add_argument("--deny-network", action="append", default=[])
     parser.add_argument("command", nargs=argparse.REMAINDER)
     arguments = parser.parse_args()
     directory: Path = arguments.directory
-    directory.mkdir(mode=0o700, exist_ok=True)
-    identity = directory.lstat()
-    if (
-        not stat.S_ISDIR(identity.st_mode)
-        or identity.st_uid != os.geteuid()
-        or stat.S_IMODE(identity.st_mode) != 0o700
-    ):
-        raise RuntimeError("Workspace network requires a trusted private directory")
-    descriptor = os.open(
-        directory / "lifetime",
-        os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW,
-        0o600,
+    registry_root = Path("/var/lib/tinkerfin-workspaces")
+    lifetime.require_private_storage(registry_root)
+    lifetime.claim(directory)
+    namespace = asyncio.run(_wait_execd_namespace())
+    registry = ProjectRegistry(
+        registry_root,
+        uid=1000,
+        gid=1000,
+        session_namespace=namespace,
     )
-    os.close(descriptor)
+    stopped = registry.retire_sessions()
     limits = Limits()
     with (
         unix_listener(directory / "egress.sock", limits.clients) as listener,
@@ -174,7 +251,10 @@ def main() -> None:
                 limits=limits,
             ),
             control,
+            session_namespace=namespace,
+            stopped_sessions=stopped,
         )
+        lifetime.publish_namespace(namespace, directory)
 
         async def serve_ready() -> None:
             print(json.dumps({"ready": True}), flush=True)
@@ -188,7 +268,10 @@ def main() -> None:
             else:
                 await _with_observation(service.serve())
 
-        asyncio.run(serve_until_signal(serve_ready()))
+        try:
+            asyncio.run(serve_until_signal(serve_ready()))
+        finally:
+            (directory / "ready").unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
