@@ -17,6 +17,8 @@ RUN git apply --check /patches/isolation.patch /patches/control-auth.patch \
     && git apply /patches/probe-ownership.patch \
     && git apply --check /patches/lifecycle-tests.patch \
     && git apply /patches/lifecycle-tests.patch \
+    && git apply --check /patches/capability-drop.patch \
+    && git apply /patches/capability-drop.patch \
     && git apply --check /patches/security-dependencies.patch \
     && git apply /patches/security-dependencies.patch
 WORKDIR /source/components/internal

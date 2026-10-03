@@ -85,6 +85,9 @@ The trusted host chooses workspace paths, bind mounts, user IDs, and network
 policy. The workspace must permit the chosen UID to write. Session root mounts
 and network restrictions still require explicit configuration; this image alone
 does not hide other projects from shell commands.
+Use a nonzero UID for untrusted commands. These setpriv sessions clear Linux
+capabilities before command execution. UID 0 sessions retain trusted
+administrative privileges and do not provide that privilege boundary.
 
 The daemon retains at most 65,536 identifiers, including cancelled identifiers.
 It never evicts cancellation records. At capacity, new identifiers receive 503;

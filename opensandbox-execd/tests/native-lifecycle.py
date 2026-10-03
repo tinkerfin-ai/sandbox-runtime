@@ -11,6 +11,8 @@ import shutil
 import stat
 import subprocess
 from pathlib import Path
+from queue import Queue
+from threading import Thread
 from urllib.parse import urlencode
 from uuid import uuid4
 
@@ -56,21 +58,35 @@ def main() -> None:
                 "--isolation-config",
                 "/tmp/isolation.toml",
             ],
-            stdout=log,
+            stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            text=True,
         )
+        output = process.stdout
+        assert output is not None
+        startup: Queue[bool] = Queue(maxsize=1)
+
+        def collect_logs() -> None:
+            ready = False
+            try:
+                for line in output:
+                    log.write(line)
+                    if not ready and "execd listening on :44772 (IPv4)" in line:
+                        ready = True
+                        startup.put(True)
+            finally:
+                if not ready:
+                    startup.put(False)
+
+        log_reader = Thread(target=collect_logs, name="execd-test-logs")
         sessions: list[str] = []
         pidfds: list[int] = []
         session_namespace = ""
         try:
-            while True:
-                if process.poll() is not None:
-                    raise RuntimeError("execd exited before accepting requests")
-                try:
-                    status, payload = request("GET", "/v1/isolated/capabilities")
-                    break
-                except ConnectionRefusedError:
-                    continue
+            log_reader.start()
+            if not startup.get():
+                raise RuntimeError("execd exited before accepting requests")
+            status, payload = request("GET", "/v1/isolated/capabilities")
             assert status == 200, payload
             capabilities = json.loads(payload)
             assert capabilities["available"], capabilities
@@ -119,6 +135,34 @@ def main() -> None:
                 assert status == 201, payload
                 assert json.loads(payload)["session_id"] == identity
             first, second = sessions
+            credentials = """import ctypes
+import errno
+import json
+import os
+import subprocess
+from pathlib import Path
+fields = dict(line.split(':', 1) for line in Path('/proc/self/status').read_text().splitlines() if ':' in line)
+caps = {name: int(fields[name].strip(), 16) for name in ('CapInh', 'CapPrm', 'CapEff', 'CapBnd', 'CapAmb')}
+print(json.dumps({'uid': os.getuid(), 'gid': os.getgid(), 'capabilities': caps, 'no_new_privs': fields['NoNewPrivs'].strip()}), flush=True)
+print(subprocess.check_output(['setpriv', '--version'], text=True).strip(), flush=True)
+assert os.getuid() == 1000 and os.getgid() == 1000
+assert not any(caps.values()), caps
+assert fields['NoNewPrivs'].strip() == '1'
+Path('/workspace/a/mount-check').mkdir()
+libc = ctypes.CDLL(None, use_errno=True)
+libc.mount.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_ulong, ctypes.c_void_p]
+libc.mount.restype = ctypes.c_int
+result = libc.mount(b'tmpfs', b'/workspace/a/mount-check', b'tmpfs', 0, None)
+assert result == -1 and ctypes.get_errno() in (errno.EPERM, errno.EACCES), 'mount syscall was not denied'
+assert ' /workspace/a/mount-check ' not in Path('/proc/self/mountinfo').read_text()
+print('unprivileged-verified')
+"""
+            status, payload = request(
+                "POST",
+                f"/v1/isolated/session/{first}/run",
+                {"code": "python3 -I -S -c " + shlex.quote(credentials)},
+            )
+            assert status == 200 and "unprivileged-verified" in payload, payload
             first_root = Path("/workspace/a")
             second_root = Path("/workspace/b")
             secret = second_root / "secret.txt"
@@ -323,6 +367,9 @@ print('descendant-ready')
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait()
+                if log_reader.ident is not None:
+                    log_reader.join()
+                output.close()
                 log.seek(0)
                 print(log.read(), flush=True)
 

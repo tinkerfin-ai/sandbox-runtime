@@ -512,18 +512,23 @@ class _Source:
         self.stop_writer.close()
         self.released = True
 
-    async def aclose(self) -> None:
+    def _begin_close(self) -> asyncio.Task[None]:
+        """Start cleanup once and retain its task until resources are released."""
         self._stop()
         if self.closing is None:
             self.closing = asyncio.create_task(self._close())
+        return self.closing
+
+    async def aclose(self) -> None:
+        cleanup = self._begin_close()
         cancelled = False
         while True:
             try:
-                await asyncio.shield(self.closing)
+                await asyncio.shield(cleanup)
                 break
             except asyncio.CancelledError:
                 cancelled = True
-                if self.closing.cancelled():
+                if cleanup.cancelled():
                     raise
         if cancelled:
             raise asyncio.CancelledError
@@ -619,20 +624,12 @@ class WorkspaceWatch:
                     if len(content) > self.limits.headers:
                         raise Unavailable(400)
             project = _project_request(bytes(content))
-            source = self.sources.get(project)
-            if source is not None and (source.closed or source.stopping.is_set()):
-                raise Unavailable()
-            created = source is None
-            if source is None:
-                if len(self.sources) >= self.limits.projects:
-                    raise Unavailable()
-                source = _Source(self.root, project, self.budget, self.limits)
-                self.sources[project] = source
-            notices = _Notices()
-            source.listeners.add(notices)
-            if created:
-                source.start()
             async with asyncio.timeout(self.limits.request_timeout):
+                source, created = await self._project_source(project)
+                notices = _Notices()
+                source.listeners.add(notices)
+                if created:
+                    source.start()
                 opened = await asyncio.shield(source.opened)
             if opened.status != 200 or opened.incarnation is None or source.closed:
                 raise Unavailable(opened.status if opened.status != 200 else 503)
@@ -684,6 +681,36 @@ class WorkspaceWatch:
                             and self.sources.get(source.project) is source
                         ):
                             del self.sources[source.project]
+
+    async def _project_source(self, project: str) -> tuple[_Source, bool]:
+        """Wait for an existing source to retire before admitting its replacement.
+
+        Waiting requests borrow the existing cleanup task. Their cancellation
+        leaves its owner and project capacity intact until thread exit is confirmed.
+        The map is checked again after each wait so concurrent subscribers share
+        the same replacement and old connections cannot remove the new source.
+
+        Args:
+            project: Lowercase project identity selected by the trusted host.
+
+        Returns:
+            The shared source and whether the caller owns starting it.
+        """
+        while True:
+            source = self.sources.get(project)
+            if source is None:
+                if len(self.sources) >= self.limits.projects:
+                    raise Unavailable()
+                source = _Source(self.root, project, self.budget, self.limits)
+                self.sources[project] = source
+                return source, True
+            if not source.closed and not source.stopping.is_set():
+                return source, False
+            await asyncio.shield(source._begin_close())
+            if not source.released:
+                raise Unavailable()
+            if self.sources.get(project) is source:
+                del self.sources[project]
 
     async def _send(self, endpoint: socket.socket, notice: dict[str, str]) -> None:
         async with asyncio.timeout(self.limits.write_timeout):

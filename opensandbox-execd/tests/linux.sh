@@ -80,6 +80,11 @@ docker cp "${SOURCE_ROOT}/components/execd/native/." "${RUNTIME_NAME}:/tests/nat
 for package in isolation runtime runtime-native bwrap; do
     docker cp "${TASK_DIRECTORY}/${package}.test" "${RUNTIME_NAME}:/tests/${package}.test"
 done
+docker exec --user 1000:1000 --workdir /tests/pkg/isolation "${RUNTIME_NAME}" /tests/isolation.test \
+    -test.run '^Test(BuildArgv|BwrapSmokeArgs|WrapWithArgv)' -test.v -test.timeout 120s &
+TEST_PROCESS=$!
+wait "${TEST_PROCESS}" || TEST_RESULT=1
+TEST_PROCESS=
 docker exec --workdir /tests/pkg/isolation "${RUNTIME_NAME}" /tests/isolation.test \
     -test.run "${ISOLATION_FILTER}" -test.v -test.timeout 120s &
 TEST_PROCESS=$!

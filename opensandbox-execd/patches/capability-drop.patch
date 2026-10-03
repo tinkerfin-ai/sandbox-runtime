@@ -1,0 +1,105 @@
+--- a/components/execd/pkg/isolation/bwrap.go
++++ b/components/execd/pkg/isolation/bwrap.go
+@@ -174,6 +174,14 @@
+ 				fmt.Sprintf("--reuid=%d", uid),
+ 				fmt.Sprintf("--regid=%d", gid),
+ 				"--clear-groups",
++			}
++			if uid != 0 {
++				setprivArgv = append(setprivArgv,
++					"--bounding-set=-all",
++					"--inh-caps=-all",
++					"--ambient-caps=-all",
++					"--no-new-privs",
++				)
+ 			}
+ 			argv = append(argv, setprivArgv...)
+ 		}
+--- a/components/execd/pkg/isolation/probe.go
++++ b/components/execd/pkg/isolation/probe.go
+@@ -235,6 +235,14 @@
+ 			fmt.Sprintf("--regid=%d", gid),
+ 			"--clear-groups",
+ 		)
++		if uid != 0 {
++			args = append(args,
++				"--bounding-set=-all",
++				"--inh-caps=-all",
++				"--ambient-caps=-all",
++				"--no-new-privs",
++			)
++		}
+ 	}
+ 	return append(args, "true")
+ }
+--- a/components/execd/pkg/isolation/bwrap_test.go
++++ b/components/execd/pkg/isolation/bwrap_test.go
+@@ -321,6 +321,20 @@
+ }
+ 
+ func TestBuildArgv_Setpriv(t *testing.T) {
++	t.Run("root_gid_switch_retains_root_policy", func(test *testing.T) {
++		options := basicWrapOpts()
++		userID, groupID := uint32(0), uint32(1000)
++		options.Uid, options.Gid = &userID, &groupID
++		arguments, err := buildArgv(options, "")
++		require.NoError(test, err)
++		assert.Contains(test, arguments, "setpriv")
++		assert.Contains(test, arguments, "--reuid=0")
++		assert.Contains(test, arguments, "--regid=1000")
++		for _, restricted := range []string{"--bounding-set=-all", "--inh-caps=-all", "--ambient-caps=-all", "--no-new-privs"} {
++			assert.NotContains(test, arguments, restricted)
++		}
++	})
++
+ 	t.Run("default_uid_gid", func(t *testing.T) {
+ 		opts := basicWrapOpts()
+ 		argv, err := buildArgv(opts, "")
+@@ -352,6 +366,9 @@
+ 		if !strings.Contains(s, "--regid=1002") {
+ 			t.Error("missing --regid=1002")
+ 		}
++		for _, required := range []string{"--bounding-set=-all", "--inh-caps=-all", "--ambient-caps=-all", "--no-new-privs"} {
++			assert.Contains(t, argv, required)
++		}
+ 	})
+ }
+ 
+--- a/components/execd/pkg/isolation/probe_test.go
++++ b/components/execd/pkg/isolation/probe_test.go
+@@ -117,12 +117,21 @@
+ 	if slices.Contains(rootSetprivArgs, "setpriv") {
+ 		t.Errorf("root setpriv smoke args unexpectedly contain setpriv: %v", rootSetprivArgs)
+ 	}
++	rootGroupArgs := bwrapSmokeArgs(UidModeSetpriv, false, 0, 1000)
++	if !slices.Contains(rootGroupArgs, "setpriv") {
++		t.Fatalf("root group switch must still invoke setpriv: %v", rootGroupArgs)
++	}
++	for _, restricted := range []string{"--bounding-set=-all", "--inh-caps=-all", "--ambient-caps=-all", "--no-new-privs"} {
++		if slices.Contains(rootGroupArgs, restricted) {
++			t.Errorf("root group switch changed root policy: %v", rootGroupArgs)
++		}
++	}
+ 
+ 	setprivArgs := bwrapSmokeArgs(UidModeSetpriv, false, 65534, 65533)
+ 	if slices.Contains(setprivArgs, "--unshare-user") {
+ 		t.Errorf("setpriv smoke args unexpectedly contain --unshare-user: %v", setprivArgs)
+ 	}
+-	for _, want := range []string{"setpriv", "--reuid=65534", "--regid=65533", "--clear-groups"} {
++	for _, want := range []string{"setpriv", "--reuid=65534", "--regid=65533", "--clear-groups", "--bounding-set=-all", "--inh-caps=-all", "--ambient-caps=-all", "--no-new-privs"} {
+ 		if !slices.Contains(setprivArgs, want) {
+ 			t.Errorf("setpriv smoke args do not contain %q: %v", want, setprivArgs)
+ 		}
+--- a/docs/components/execd.md
++++ b/docs/components/execd.md
+@@ -118,7 +118,9 @@
+ The optional `uid_mode` request field selects how identity is established:
+ 
+ - `setpriv` (the default) uses the container's existing user namespace and
+-  drops to the requested UID/GID with `setpriv`.
++  drops to the requested UID/GID with `setpriv`. When switching to a nonzero
++  UID, it clears bounding, inheritable and ambient capabilities and
++  prevents gaining privileges through subsequent execution.
+ - `userns` creates a new user namespace and maps the requested UID/GID inside
+   it, which can work in environments where the capabilities required by
+   `setpriv` mode are unavailable.

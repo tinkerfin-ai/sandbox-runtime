@@ -13,12 +13,12 @@ import threading
 import unittest
 from _thread import RLock
 from collections import deque
-from collections.abc import Callable, Iterable
-from dataclasses import replace
+from collections.abc import AsyncIterator, Callable, Iterable
+from dataclasses import dataclass, replace
 from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace, TracebackType
-from typing import ClassVar, Self
+from typing import ClassVar, Self, TypeVar
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -27,6 +27,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "workspace-runtime"
 import supervise
 import watch
 from registry import ProjectRegistry, RegistryError, SessionOwner
+
+_Awaited = TypeVar("_Awaited")
+
+
+async def _settle(task: asyncio.Task[_Awaited]) -> None:
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
 
 
 def _bootstrap_lock() -> RLock:
@@ -778,6 +785,14 @@ class _Deadlines:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class _Retiring:
+    service: watch.WorkspaceWatch
+    source: watch._Source
+    admissions: asyncio.Queue[None]
+    deadlines: _Deadlines
+
+
 class HttpTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.directory = tempfile.TemporaryDirectory(prefix="tinkerfin-watch-http-")
@@ -853,6 +868,175 @@ class HttpTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(notice["type"], "ready")
         self.assertEqual(notice["incarnation"], self.record.incarnation)
         return notice
+
+    @contextlib.asynccontextmanager
+    async def retiring_project(
+        self, limits: watch.Limits = watch._DEFAULT_LIMITS
+    ) -> AsyncIterator[_Retiring]:
+        service = await self.start(
+            replace(limits, request_timeout=11, write_timeout=22, heartbeat=33)
+        )
+        first, writer = await self.connect()
+        await self.ready(first)
+        source = service.sources[self.project]
+        request = next(iter(service.clients))
+        native_exit = asyncio.get_running_loop().run_in_executor(
+            None, source.thread.join
+        )
+        joined = asyncio.Event()
+        release = asyncio.Event()
+        admissions: asyncio.Queue[None] = asyncio.Queue(maxsize=64)
+        deadlines = _Deadlines()
+        original_sleep = watch.asyncio.sleep
+
+        async def sleep(delay: float) -> None:
+            if asyncio.current_task() is source.closing:
+                self.assertEqual(delay, watch._JOIN_INTERVAL)
+                joined.set()
+                await release.wait()
+            else:
+                await original_sleep(delay)
+
+        def shield(value: asyncio.Future[_Awaited]) -> asyncio.Future[_Awaited]:
+            if value is source.closing and asyncio.current_task() is not request:
+                admissions.put_nowait(None)
+            return asyncio.shield(value)
+
+        module = deadlines.module()
+        module.sleep = sleep
+        module.shield = shield
+        with patch.object(watch, "asyncio", module):
+            try:
+                with _bootstrap_lock():
+                    await self.close_writer(writer)
+                    checking = asyncio.create_task(joined.wait())
+                    try:
+                        done, _ = await asyncio.wait(
+                            (checking, request), return_when=asyncio.FIRST_COMPLETED
+                        )
+                        if request in done:
+                            request.result()
+                            self.fail(
+                                "retirement ended before thread exit confirmation"
+                            )
+                    finally:
+                        await _settle(checking)
+                    yield _Retiring(service, source, admissions, deadlines)
+            finally:
+                source._stop()
+                await native_exit
+                release.set()
+                await request
+
+    async def waits_for_retirement(
+        self, retiring: _Retiring, opening: asyncio.Task[_Awaited]
+    ) -> None:
+        waiting = asyncio.create_task(retiring.admissions.get())
+        try:
+            done, _ = await asyncio.wait(
+                (waiting, opening), return_when=asyncio.FIRST_COMPLETED
+            )
+            if opening in done:
+                opening.result()
+                self.fail("admission finished before the previous source retired")
+        finally:
+            await _settle(waiting)
+
+    async def test_reopening_waits_for_retirement_and_shares_one_fresh_source(
+        self,
+    ) -> None:
+        async with self.retiring_project(
+            replace(watch._DEFAULT_LIMITS, projects=1)
+        ) as retiring:
+            second, _ = await self.connect()
+            second_ready = asyncio.create_task(self.ready(second))
+            self.addAsyncCleanup(_settle, second_ready)
+            await self.waits_for_retirement(retiring, second_ready)
+            third, _ = await self.connect()
+            third_ready = asyncio.create_task(self.ready(third))
+            self.addAsyncCleanup(_settle, third_ready)
+            await self.waits_for_retirement(retiring, third_ready)
+            self.assertIs(retiring.service.sources[self.project], retiring.source)
+            self.assertFalse(retiring.source.released)
+            self.assertEqual(len(_ManualInotify.instances), 1)
+            rejected, _ = await self.connect(sha256(b"project-b").hexdigest())
+            self.assertTrue((await rejected.read()).startswith(b"HTTP/1.1 503 "))
+        second_notice, third_notice = await asyncio.gather(second_ready, third_ready)
+        self.assertEqual(second_notice, third_notice)
+        self.assertIsNot(retiring.service.sources[self.project], retiring.source)
+        self.assertEqual(len(retiring.service.sources), 1)
+        self.assertEqual(len(_ManualInotify.instances), 2)
+        self.assertTrue(retiring.source.released)
+
+    async def test_retirement_admission_deadline_does_not_cancel_owned_cleanup(
+        self,
+    ) -> None:
+        async with self.retiring_project() as retiring:
+            reader, _ = await self.connect()
+            response = asyncio.create_task(reader.read())
+            self.addAsyncCleanup(_settle, response)
+            await self.waits_for_retirement(retiring, response)
+            cleanup = retiring.source.closing
+            assert cleanup is not None
+            (await retiring.deadlines.active(11)).expire()
+            self.assertTrue((await response).startswith(b"HTTP/1.1 503 "))
+            self.assertFalse(cleanup.cancelled())
+            self.assertFalse(cleanup.done())
+            self.assertIs(retiring.service.sources[self.project], retiring.source)
+            self.assertFalse(retiring.source.released)
+        self.assertTrue(retiring.source.released)
+        self.assertEqual(retiring.service.sources, {})
+        self.assertEqual(len(_ManualInotify.instances), 1)
+
+    async def test_cancelled_retirement_admission_leaves_cleanup_owned(self) -> None:
+        async with self.retiring_project() as retiring:
+            previous = set(retiring.service.clients)
+            reader, _ = await self.connect()
+            response = asyncio.create_task(reader.read())
+            self.addAsyncCleanup(_settle, response)
+            await self.waits_for_retirement(retiring, response)
+            pending = retiring.service.clients - previous
+            self.assertEqual(len(pending), 1)
+            request = pending.pop()
+            request.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await request
+            self.assertEqual(await response, b"")
+            cleanup = retiring.source.closing
+            assert cleanup is not None
+            self.assertFalse(cleanup.cancelled())
+            self.assertFalse(cleanup.done())
+            self.assertIs(retiring.service.sources[self.project], retiring.source)
+        self.assertEqual(retiring.service.sources, {})
+        self.assertEqual(len(_ManualInotify.instances), 1)
+
+    async def _reopen_after_deletion(self, *, complete: bool) -> None:
+        async with self.retiring_project() as retiring:
+            reader, _ = await self.connect()
+            response = asyncio.create_task(reader.read())
+            self.addAsyncCleanup(_settle, response)
+            await self.waits_for_retirement(retiring, response)
+            deleting = self.registry.begin_delete(self.project)
+            assert deleting is not None and deleting.deletion_id is not None
+            if complete:
+                self.registry.finish_delete(
+                    self.project,
+                    deleting.incarnation,
+                    deleting.deletion_id,
+                    deleting.sessions,
+                )
+        expected = b"HTTP/1.1 404 " if complete else b"HTTP/1.1 409 "
+        self.assertTrue((await response).startswith(expected))
+        self.assertTrue(retiring.source.released)
+        record = self.registry.begin_delete(self.project)
+        assert record is not None
+        self.assertEqual(record.phase, "deleted" if complete else "deleting")
+
+    async def test_deleting_project_is_rechecked_after_retirement(self) -> None:
+        await self._reopen_after_deletion(complete=False)
+
+    async def test_deleted_project_is_not_created_after_retirement(self) -> None:
+        await self._reopen_after_deletion(complete=True)
 
     async def test_shared_project_survives_one_client_disconnect(self) -> None:
         service = await self.start()
