@@ -8,6 +8,7 @@ import os
 import select
 import shlex
 import shutil
+import socket
 import stat
 import subprocess
 from pathlib import Path
@@ -293,15 +294,33 @@ print('descendant-ready')
             assert create(first, Path("/workspace/a"))[0] == 409
             assert delete(first)[0] == 200
 
-            status, payload = request(
-                "POST",
-                f"/v1/isolated/session/{second}/run",
-                {
-                    "code": "python3 -c 'import signal; signal.pause()'",
-                    "background": True,
-                },
-            )
-            assert status == 202, payload
+            readiness_path = second_root / "background-ready.sock"
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as readiness:
+                    readiness.settimeout(30)
+                    readiness.bind(str(readiness_path))
+                    readiness_path.chmod(0o666)
+                    readiness.listen(1)
+                    background = (
+                        "import signal, socket; "
+                        "connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); "
+                        f"connection.connect({str(readiness_path)!r}); "
+                        "connection.sendall(b'R'); connection.close(); signal.pause()"
+                    )
+                    status, payload = request(
+                        "POST",
+                        f"/v1/isolated/session/{second}/run",
+                        {
+                            "code": "python3 -I -S -c " + shlex.quote(background),
+                            "background": True,
+                        },
+                    )
+                    assert status == 202, payload
+                    with readiness.accept()[0] as ready_connection:
+                        ready_connection.settimeout(30)
+                        assert ready_connection.recv(1) == b"R"
+            finally:
+                readiness_path.unlink(missing_ok=True)
             run_id = json.loads(payload)["run_id"]
             status, payload = request(
                 "POST",
