@@ -36,9 +36,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Verify native runner architecture
         shell: bash
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
         run: |
           runner_arch=$(uname -m)
-          case "${{ matrix.arch }}:${runner_arch}" in
+          case "${EXPECTED_ARCH}:${runner_arch}" in
             amd64:x86_64|arm64:aarch64) ;;
             *) printf 'unexpected runner architecture: %s\n' "${runner_arch}" >&2; exit 1 ;;
           esac
@@ -107,6 +109,7 @@ jobs:
             MAVEN_VERSION=${{ env.MAVEN_VERSION }}
             SETUPTOOLS_VERSION=${{ env.SETUPTOOLS_VERSION }}
             NPM_BRACE_EXPANSION_VERSION=${{ env.NPM_BRACE_EXPANSION_VERSION }}
+            NPM_UNDICI_VERSION=${{ env.NPM_UNDICI_VERSION }}
             NPM_IP_ADDRESS_VERSION=${{ env.NPM_IP_ADDRESS_VERSION }}
             NPM_TAR_VERSION=${{ env.NPM_TAR_VERSION }}
             NPM_TAR_SHA512=${{ env.NPM_TAR_SHA512 }}
@@ -114,6 +117,7 @@ jobs:
             NODE_SHA256_ARM64=${{ env.NODE_SHA256_ARM64 }}
             NPM_SHA512=${{ env.NPM_SHA512 }}
             NPM_BRACE_EXPANSION_SHA512=${{ env.NPM_BRACE_EXPANSION_SHA512 }}
+            NPM_UNDICI_SHA512=${{ env.NPM_UNDICI_SHA512 }}
             NPM_IP_ADDRESS_SHA512=${{ env.NPM_IP_ADDRESS_SHA512 }}
             SETUPTOOLS_SHA256=${{ env.SETUPTOOLS_SHA256 }}
             GO_SHA256_AMD64=${{ env.GO_SHA256_AMD64 }}
@@ -127,11 +131,24 @@ jobs:
       - name: Pull exact platform digest
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-        run: docker pull --platform "${{ matrix.platform }}" "${IMAGE_NAME}@${DIGEST}"
+        run: |
+          release_ref="${IMAGE_NAME}@${DIGEST}"
+          if ! docker image inspect "${release_ref}" >/dev/null 2>&1; then
+            printf 'OWNED_VERIFICATION_IMAGE=%s\n' "${release_ref}" >>"${GITHUB_ENV}"
+          fi
+          docker pull --platform "${{ matrix.platform }}" "${release_ref}"
       - name: Run runtime smoke test
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: ./tests/runtime-smoke.sh "${IMAGE_NAME}@${DIGEST}"
+      - name: Verify workspace helpers installed in the image
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: make workspace-test IMAGE="${IMAGE_NAME}@${DIGEST}"
+      - name: Verify test cleanup on interruption
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: make runtime-signals IMAGE="${IMAGE_NAME}@${DIGEST}"
       - name: Report high and critical vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -166,6 +183,15 @@ jobs:
           path: ${{ runner.temp }}/digests/*
           if-no-files-found: error
           retention-days: 1
+      - name: Remove locally pulled verification image
+        if: always() && env.OWNED_VERIFICATION_IMAGE != ''
+        run: |
+          if docker image inspect "${OWNED_VERIFICATION_IMAGE}" >/dev/null 2>&1; then
+            docker image rm "${OWNED_VERIFICATION_IMAGE}"
+          fi
+          if docker image inspect "${OWNED_VERIFICATION_IMAGE}" >/dev/null 2>&1; then
+            exit 1
+          fi
 
   publish:
     name: Publish OCI index

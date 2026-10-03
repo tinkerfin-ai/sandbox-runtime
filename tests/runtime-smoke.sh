@@ -7,16 +7,54 @@ readonly REPO_ROOT
 
 readonly IMAGE_REF=${1:?usage: tests/runtime-smoke.sh IMAGE_REF}
 readonly MAX_UNPACKED_BYTES=${MAX_UNPACKED_BYTES:-2500000000}
-
-container_id=
+RUN_ID=$(python3 -c 'from uuid import uuid4; print(uuid4().hex)')
+readonly RUN_ID
+readonly ENVIRONMENT_NAME="tinkerfin-runtime-environment-${RUN_ID}"
+readonly TOOLCHAINS_NAME="tinkerfin-runtime-toolchains-${RUN_ID}"
+readonly BROWSER_NAME="tinkerfin-runtime-browser-${RUN_ID}"
+test_process=
 
 cleanup() {
-    if [[ -n ${container_id} ]]; then
-        docker rm --force "${container_id}" >/dev/null 2>&1 || true
+    local result=$?
+    trap - EXIT
+    trap '' INT TERM
+    test_process=${test_process:-${!:-}}
+    if [[ -n ${test_process} ]]; then
+        kill -TERM "${test_process}" 2>/dev/null || true
     fi
+    local name owner
+    for name in "${ENVIRONMENT_NAME}" "${TOOLCHAINS_NAME}" "${BROWSER_NAME}"; do
+        if docker container inspect "${name}" >/dev/null 2>&1; then
+            owner=$(docker inspect --format '{{index .Config.Labels "io.tinkerfin.runtime-test"}}' "${name}")
+            [[ ${owner} == "${RUN_ID}" ]] || exit 1
+            docker rm --force --volumes "${name}" >/dev/null || exit 1
+        fi
+    done
+    if [[ -n ${test_process} ]]; then
+        wait "${test_process}" 2>/dev/null || true
+    fi
+    local remaining
+    remaining=$(docker ps --all --quiet --filter "label=io.tinkerfin.runtime-test=${RUN_ID}")
+    [[ -z ${remaining} ]] || exit 1
+    printf 'runtime smoke cleanup: %s; remaining=[]\n' "${RUN_ID}"
+    exit "${result}"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
+run_container() {
+    local name=$1
+    shift
+    docker create --pull never --name "${name}" --interactive --network none \
+        --label "io.tinkerfin.runtime-test=${RUN_ID}" "$@" >/dev/null
+    docker start --attach --interactive "${name}" <&0 &
+    test_process=$!
+    wait "${test_process}"
+    test_process=
+}
+
+printf 'runtime smoke run: %s\n' "${RUN_ID}"
 image_size=$(docker image inspect --format '{{.Size}}' "${IMAGE_REF}")
 if ((image_size > MAX_UNPACKED_BYTES)); then
     printf 'image is too large: %s bytes (limit %s)\n' \
@@ -24,18 +62,16 @@ if ((image_size > MAX_UNPACKED_BYTES)); then
     exit 1
 fi
 
-container_id=$(docker run --detach \
+if [[ ${RUNTIME_TEST_SIGNAL_CHECK:-0} == 1 ]]; then
+    run_container "${ENVIRONMENT_NAME}" --entrypoint python "${IMAGE_REF}" \
+        -u -I -S -c 'import signal; print("runtime smoke signal-ready", flush=True); signal.pause()'
+    exit 0
+fi
+
+run_container "${ENVIRONMENT_NAME}" \
     --env EXECD_ENVS=/tmp/execd.env \
-    "${IMAGE_REF}")
-[[ $(docker inspect --format '{{.State.Running}}' "${container_id}") == true ]]
-for _attempt in {1..75}; do
-    if docker exec "${container_id}" test -f /tmp/execd.env; then
-        break
-    fi
-    sleep 0.2
-done
-docker exec "${container_id}" test -f /tmp/execd.env
-docker exec "${container_id}" bash -Eeuo pipefail -c '
+    "${IMAGE_REF}" bash -Eeuo pipefail <<'BASH'
+    test -f /tmp/execd.env
     test "$(rg --count "^PATH=" /tmp/execd.env)" -eq 1
     test "$(rg --count "^VIRTUAL_ENV=" /tmp/execd.env)" -eq 1
     rg --quiet "^VIRTUAL_ENV=/opt/sandbox-runtime/venv$" /tmp/execd.env
@@ -44,11 +80,9 @@ docker exec "${container_id}" bash -Eeuo pipefail -c '
     rg --quiet "^GOROOT=/opt/sandbox-runtime/go$" /tmp/execd.env
     rg --quiet "^MAVEN_HOME=/opt/sandbox-runtime/maven$" /tmp/execd.env
     rg --quiet "^PLAYWRIGHT_BROWSERS_PATH=/opt/sandbox-runtime/browsers$" /tmp/execd.env
-'
-docker rm --force "${container_id}" >/dev/null
-container_id=
+BASH
 
-docker run --rm "${IMAGE_REF}" bash -Eeuo pipefail -c '
+run_container "${TOOLCHAINS_NAME}" "${IMAGE_REF}" bash -Eeuo pipefail <<'BASH'
     test "${VIRTUAL_ENV}" = /opt/sandbox-runtime/venv
     test "${JAVA_HOME}" = /opt/sandbox-runtime/jdk
     test "${GOROOT}" = /opt/sandbox-runtime/go
@@ -83,7 +117,10 @@ PY
     test "$(npm --version)" = 12.0.2
     test "$(node -p \
         "require(\"/opt/sandbox-runtime/node/lib/node_modules/npm/node_modules/brace-expansion/package.json\").version")" \
-        = 5.0.9
+        = 5.0.11
+    test "$(node -p \
+        "require(\"/opt/sandbox-runtime/node/lib/node_modules/npm/node_modules/undici/package.json\").version")" \
+        = 6.28.1
     test "$(node -p \
         "require(\"/opt/sandbox-runtime/node/lib/node_modules/npm/node_modules/ip-address/package.json\").version")" \
         = 10.3.1
@@ -108,6 +145,7 @@ JS
     test -s /tmp/npm-smoke/npm-smoke-1.0.0.tgz
 
     test "$(python -c "import setuptools; print(setuptools.__version__)")" = 84.0.0
+    test "$(python -c "import urllib3; print(urllib3.__version__)")" = 2.8.0
     test "$(/usr/local/bin/python -c \
         "import setuptools; print(setuptools.__version__)")" = 84.0.0
 
@@ -123,9 +161,14 @@ JS
         "int main(void){fputs(\"c-ok\", stdout);return 0;}" >/tmp/main.c
     cc /tmp/main.c -o /tmp/c-smoke
     test "$(/tmp/c-smoke)" = c-ok
-'
+BASH
 
-docker run --rm --interactive --network none "${IMAGE_REF}" python - \
-    <"${REPO_ROOT}/tests/browser-smoke.py"
+docker create --pull never --name "${BROWSER_NAME}" --interactive --network none \
+    --label "io.tinkerfin.runtime-test=${RUN_ID}" "${IMAGE_REF}" python - >/dev/null
+docker start --attach --interactive "${BROWSER_NAME}" \
+    <"${REPO_ROOT}/tests/browser-smoke.py" &
+test_process=$!
+wait "${test_process}"
+test_process=
 
 printf 'runtime smoke passed for %s (%s bytes)\n' "${IMAGE_REF}" "${image_size}"

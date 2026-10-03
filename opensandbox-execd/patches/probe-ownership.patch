@@ -1,0 +1,710 @@
+--- a/components/execd/pkg/runtime/isolated_session.go
++++ b/components/execd/pkg/runtime/isolated_session.go
+@@ -100,8 +100,11 @@
+ 	// must not collect the session (background processes die with the bwrap
+ 	// process group).
+ 	activeBackgroundRuns atomic.Int64
+-	namespacePinner      sessionNamespacePinner
+-	namespacePins        sessionNamespacePins
++	// pendingBackgroundProbe is registered before dispatch. runMu serializes
++	// access; teardown reads it only after operations and the namespace drain.
++	pendingBackgroundProbe string
++	namespacePinner        sessionNamespacePinner
++	namespacePins          sessionNamespacePins
+ }
+ 
+ const isolatedSessionStartupTimeout = 10 * time.Second
+--- a/components/execd/pkg/runtime/isolated_background.go
++++ b/components/execd/pkg/runtime/isolated_background.go
+@@ -124,6 +124,8 @@
+ // returns immediately with a run ID. Runs are serialized per session (shared
+ // stdin), but this only holds the run mutex long enough to submit the script.
+ // Delete confirms namespace termination and drains the run's monitor.
++// An unconfirmed log-directory check rejects further submissions until its
++// result arrives; each accepted submission still performs a fresh check.
+ func (r *IsolatedRunner) RunInIsolatedSessionBackground(
+ 	id string,
+ 	code string,
+@@ -264,13 +266,32 @@
+ // request only until the bounded poll window elapses — it cannot hang the
+ // handler forever (a stdout-marker scan would block on the still-open pipe
+ // after its context expires). Returns an error when no writable log location
+-// exists or the probe does not complete in time.
++// exists or the probe does not complete in time. At most one unconfirmed probe
++// is retained per session; another cannot be submitted until it completes.
+ func (r *IsolatedRunner) preflightBackgroundLogDir(
+ 	s *isolatedSession,
+ 	stdin io.Writer,
+ 	paths backgroundRunPaths,
+ ) error {
++	root, err := s.view.OpenWritableRoot()
++	if err != nil {
++		return fmt.Errorf("open background run log root: %w", err)
++	}
++	defer root.Close()
++	if s.pendingBackgroundProbe != "" {
++		_, ready, err := s.readBackgroundProbe(root)
++		if err != nil {
++			return err
++		}
++		if !ready {
++			return fmt.Errorf("background runs unavailable: a previous preflight probe has not completed")
++		}
++	}
++	if s.dead() {
++		return ErrSessionNotActive
++	}
+ 	probeName := ".probe-" + uuid.New().String()
++	s.pendingBackgroundProbe = probeName
+ 	probeScript := backgroundRunDirScript(paths) +
+ 		"\nif [ -w \"$D\" ]; then echo 0; else echo 1; fi >\"$D/" + probeName + "\"\n"
+ 
+@@ -278,34 +299,54 @@
+ 		return fmt.Errorf("write preflight probe: %w", err)
+ 	}
+ 
+-	root, err := s.view.OpenWritableRoot()
+-	if err != nil {
+-		return fmt.Errorf("open background run log root: %w", err)
+-	}
+-	defer root.Close()
+-
+-	probeRels := []string{filepath.Join(isolatedBackgroundRunDir, probeName), probeName}
+-	deadline := time.Now().Add(isolatedBackgroundProbeTimeout)
++	deadline := time.NewTimer(isolatedBackgroundProbeTimeout)
++	defer deadline.Stop()
++	poll := time.NewTicker(100 * time.Millisecond)
++	defer poll.Stop()
+ 	for {
+-		for _, rel := range probeRels {
+-			content, ok := readIsolatedControlFile(root, rel, 64)
+-			if !ok {
+-				continue
+-			}
+-			_ = root.Remove(rel)
+-			if strings.TrimSpace(content) == "0" {
++		if s.dead() {
++			return ErrSessionNotActive
++		}
++		content, ready, err := s.readBackgroundProbe(root)
++		if err != nil {
++			return err
++		}
++		if ready {
++			if content == "0" {
+ 				return nil
+ 			}
+ 			return fmt.Errorf("background runs unavailable: workspace is not writable by the session uid")
+ 		}
+-		if time.Now().After(deadline) {
+-			// The probe never completed: either no writable log location
+-			// exists (the probe could not write its result) or the session
+-			// shell is unresponsive. Both reject the run.
++		select {
++		case <-s.doneCh:
++			return ErrSessionNotActive
++		case <-deadline.C:
+ 			return fmt.Errorf("background runs unavailable: workspace is not writable by the session uid (preflight probe did not complete)")
++		case <-poll.C:
+ 		}
+-		time.Sleep(100 * time.Millisecond)
++	}
++}
++
++func (s *isolatedSession) readBackgroundProbe(root *os.Root) (string, bool, error) {
++	if s.pendingBackgroundProbe == "" {
++		return "", false, nil
+ 	}
++	for _, relative := range []string{
++		filepath.Join(isolatedBackgroundRunDir, s.pendingBackgroundProbe),
++		s.pendingBackgroundProbe,
++	} {
++		content, ready := readIsolatedControlFile(root, relative, 64)
++		if !ready || (content != "0" && content != "1") {
++			continue
++		}
++		if err := root.Remove(relative); err != nil &&
++			!errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
++			return "", false, fmt.Errorf("remove completed preflight probe: %w", err)
++		}
++		s.pendingBackgroundProbe = ""
++		return content, true, nil
++	}
++	return "", false, nil
+ }
+ 
+ // watchBackgroundRun marks the run finished when the session shell writes the
+@@ -464,32 +505,22 @@
+ 	}
+ }
+ 
+-// sweepIsolatedProbeFiles removes stale preflight probe markers from the run
+-// log directory and the workspace root. Probes can be abandoned when a
+-// preflight times out with a wedged session shell.
+-func sweepIsolatedProbeFiles(root *os.Root) {
+-	for _, dir := range []string{".", isolatedBackgroundRunDir} {
+-		d, err := root.OpenFile(dir, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
+-		if err != nil {
+-			continue
+-		}
+-		entries, err := d.ReadDir(-1)
+-		_ = d.Close()
+-		if err != nil {
+-			continue
+-		}
+-		for _, e := range entries {
+-			if strings.HasPrefix(e.Name(), ".probe-") {
+-				_ = root.Remove(filepath.Join(dir, e.Name()))
+-			}
++func removeIsolatedProbeFiles(root *os.Root, probeName string) error {
++	var removeErr error
++	for _, relative := range []string{filepath.Join(isolatedBackgroundRunDir, probeName), probeName} {
++		if err := root.Remove(relative); err != nil &&
++			!errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
++			removeErr = errors.Join(removeErr, err)
+ 		}
+ 	}
++	return removeErr
+ }
+ 
+ // removeSessionBackgroundRuns drops every run record of a session and removes
+-// the run's log/exit-code files plus stale preflight probe markers. Called
++// the run's log/exit-code files plus its unconfirmed preflight probe. Called
+ // from DeleteIsolatedSession after process and operation drain, before the
+-// upper layer and session ownership are released.
++// upper layer and session ownership are released. Shared control directories
++// remain available to sessions that have selected them but not yet written.
+ func (r *IsolatedRunner) removeSessionBackgroundRuns(s *isolatedSession) {
+ 	var root *os.Root
+ 	if s.view != nil {
+@@ -497,10 +528,12 @@
+ 	}
+ 	if root != nil {
+ 		defer root.Close()
+-		sweepIsolatedProbeFiles(root)
++		if s.pendingBackgroundProbe != "" {
++			_ = removeIsolatedProbeFiles(root, s.pendingBackgroundProbe)
++			s.pendingBackgroundProbe = ""
++		}
+ 	}
+ 
+-	runDirRemoved := false
+ 	r.bgRuns.Range(func(key, value any) bool {
+ 		run, ok := value.(*IsolatedBackgroundRun)
+ 		if !ok || run.SessionID != s.id {
+@@ -508,19 +541,10 @@
+ 		}
+ 		if root != nil {
+ 			removeIsolatedRunFiles(root, run)
+-			if err := root.Remove(isolatedBackgroundRunDir); err == nil {
+-				runDirRemoved = true
+-			}
+ 		}
+ 		r.bgRuns.Delete(key)
+ 		return true
+ 	})
+-	if runDirRemoved {
+-		// The .execd parent is removed only when the run dir removal
+-		// succeeded, so a user-owned .execd file or non-empty dir is never
+-		// touched.
+-		_ = root.Remove(".execd")
+-	}
+ }
+ 
+ // backgroundRunPaths holds shell paths inside the session namespace.
+--- a/components/execd/pkg/runtime/isolated_background_test.go
++++ b/components/execd/pkg/runtime/isolated_background_test.go
+@@ -407,8 +407,8 @@
+ }
+ 
+ // TestDeleteSessionRemovesRWRunArtifacts verifies that run log/exit files in
+-// an rw workspace (and the execd-managed run directory) are removed when the
+-// session is deleted, so they do not accumulate in the user's workspace.
++// an rw workspace are removed when the session is deleted, while shared
++// control directories remain available to other sessions.
+ func TestDeleteSessionRemovesRWRunArtifacts(t *testing.T) {
+ 	runner := newTestRunner(t)
+ 	ws := filepath.Join(t.TempDir(), "ws")
+@@ -435,16 +435,18 @@
+ 		t.Fatalf("DeleteIsolatedSession: %v", err)
+ 	}
+ 
+-	// Run files and the now-empty execd-managed dirs are gone.
+ 	if _, err := os.Stat(filepath.Join(runDir, runID+".log")); !os.IsNotExist(err) {
+ 		t.Errorf("run log should be removed after delete, stat err = %v", err)
+ 	}
+-	if _, err := os.Stat(runDir); !os.IsNotExist(err) {
+-		t.Errorf("run dir should be removed after delete, stat err = %v", err)
++	if _, err := os.Stat(filepath.Join(runDir, runID+".code")); !os.IsNotExist(err) {
++		t.Errorf("run exit code should be removed after delete, stat err = %v", err)
+ 	}
+-	if _, err := os.Stat(filepath.Join(ws, ".execd")); !os.IsNotExist(err) {
+-		t.Errorf(".execd should be removed when empty, stat err = %v", err)
++	if _, err := os.Stat(runDir); err != nil {
++		t.Errorf("shared run directory should remain after delete: %v", err)
+ 	}
++	if _, err := os.Stat(filepath.Join(ws, ".execd")); err != nil {
++		t.Errorf("shared .execd directory should remain after delete: %v", err)
++	}
+ }
+ 
+ // TestRunInIsolatedSessionBackground_RejectsUnwritableWorkspace verifies that
+--- a/components/execd/pkg/runtime/isolated_control_cleanup_test.go
++++ b/components/execd/pkg/runtime/isolated_control_cleanup_test.go
+@@ -32,6 +32,10 @@
+ 			openSessionView(test, session)
+ 			runner.sessionIDs = map[string]struct{}{session.id: {}}
+ 			runner.ctrl.isolatedSessionMap.Store(session.id, session)
++			probeName := queueTestProbe(test, runner, session)
++			if err := os.WriteFile(filepath.Join(workspace, probeName), []byte("0"), 0o600); err != nil {
++				test.Fatal(err)
++			}
+ 
+ 			if err := runner.DeleteIsolatedSession(session.id); err != nil {
+ 				test.Fatal(err)
+@@ -39,6 +43,9 @@
+ 			if runner.lookup(session.id) != nil {
+ 				test.Fatal("completed cleanup retained session ownership")
+ 			}
++			if _, err := os.Lstat(filepath.Join(workspace, probeName)); !os.IsNotExist(err) {
++				test.Fatalf("owned fallback probe remains: %v", err)
++			}
+ 			if err := runner.DeleteIsolatedSession(session.id); err != nil {
+ 				test.Fatalf("repeated delete: %v", err)
+ 			}
+--- a/components/execd/pkg/runtime/isolated_control_root_test.go
++++ b/components/execd/pkg/runtime/isolated_control_root_test.go
+@@ -42,8 +42,9 @@
+ 			foreignRoot := test.TempDir()
+ 			run := &IsolatedBackgroundRun{ID: "owned-run", SessionID: sessionID}
+ 			runner.bgRuns.Store(run.ID, run)
++			probeName := queueTestProbe(test, runner, session)
+ 			artifacts := []string{
+-				".probe-owned", filepath.Join(isolatedBackgroundRunDir, ".probe-owned"),
++				probeName, filepath.Join(isolatedBackgroundRunDir, probeName),
+ 				run.relLogPath(), run.relExitPath(), run.relFallbackLogPath(), run.relFallbackExitPath(),
+ 			}
+ 			for _, root := range []string{rootPath, foreignRoot} {
+@@ -208,7 +209,7 @@
+ 	workspace := test.TempDir()
+ 	foreignRoot := test.TempDir()
+ 	for _, root := range []string{workspace, foreignRoot} {
+-		if err := os.WriteFile(filepath.Join(root, ".probe-owned"), []byte(root), 0o600); err != nil {
++		if err := os.WriteFile(filepath.Join(root, ".probe-user-data"), []byte(root), 0o600); err != nil {
+ 			test.Fatal(err)
+ 		}
+ 	}
+@@ -238,12 +239,13 @@
+ 	if !errors.Is(err, startupErr) {
+ 		test.Fatalf("startup error = %v", err)
+ 	}
+-	contents, err := os.ReadFile(filepath.Join(foreignRoot, ".probe-owned"))
++	contents, err := os.ReadFile(filepath.Join(foreignRoot, ".probe-user-data"))
+ 	if err != nil || string(contents) != foreignRoot {
+ 		test.Fatalf("failed-start cleanup changed foreign probe: %q, %v", contents, err)
+ 	}
+-	if _, err := os.Lstat(filepath.Join(pinnedPath, ".probe-owned")); !os.IsNotExist(err) {
+-		test.Fatalf("failed-start cleanup retained owned probe: %v", err)
++	contents, err = os.ReadFile(filepath.Join(pinnedPath, ".probe-user-data"))
++	if err != nil || string(contents) != workspace {
++		test.Fatalf("failed-start cleanup changed unowned workspace data: %q, %v", contents, err)
+ 	}
+ 	if len(runner.ListIsolatedSessions()) != 0 {
+ 		test.Fatal("failed startup retained session ownership")
+--- /dev/null
++++ b/components/execd/pkg/runtime/isolated_probe_ownership_test.go
+@@ -0,0 +1,394 @@
++//go:build !windows
++
++package runtime
++
++import (
++	"context"
++	"errors"
++	"io"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"regexp"
++	"testing"
++	"testing/synctest"
++)
++
++func TestBackgroundProbeUsesWritableFallbackWithOutsideControlSymlink(test *testing.T) {
++	runner := newTestRunner(test)
++	workspace := test.TempDir()
++	foreignFile := filepath.Join(test.TempDir(), "control-file")
++	if err := os.WriteFile(foreignFile, []byte("keep"), 0o600); err != nil {
++		test.Fatal(err)
++	}
++	if err := os.Symlink(foreignFile, filepath.Join(workspace, ".execd")); err != nil {
++		test.Fatal(err)
++	}
++	session := newProbeTestSession(test, runner, "fallback-session", workspace)
++	test.Cleanup(func() {
++		if err := runner.Close(); err != nil {
++			test.Error(err)
++		}
++	})
++	writer := isolatedControlWriter(func(payload []byte) (int, error) {
++		if err := exec.Command("sh", "-c", string(payload)).Run(); err != nil {
++			return 0, err
++		}
++		return len(payload), nil
++	})
++	if err := submitTestProbe(runner, session, writer); err != nil {
++		test.Fatalf("writable fallback rejected: %v", err)
++	}
++	if err := os.Remove(filepath.Join(workspace, ".execd")); err != nil {
++		test.Fatal(err)
++	}
++	if err := submitTestProbe(runner, session, writer); err != nil {
++		test.Fatalf("fresh probe after directory repair rejected: %v", err)
++	}
++	contents, err := os.ReadFile(foreignFile)
++	if err != nil || string(contents) != "keep" {
++		test.Fatalf("outside file changed: %q, %v", contents, err)
++	}
++}
++
++func TestDeleteSessionPreservesUnownedProbeFiles(test *testing.T) {
++	runner := newTestRunner(test)
++	workspace := test.TempDir()
++	sessionID, err := runner.CreateIsolatedSession(context.Background(), &IsolatedSessionOptions{
++		WorkspacePath: workspace,
++		WorkspaceMode: "rw",
++	})
++	if err != nil {
++		test.Fatal(err)
++	}
++	test.Cleanup(func() {
++		if err := runner.Close(); err != nil {
++			test.Error(err)
++		}
++	})
++	view, err := runner.GetMergedView(sessionID)
++	if err != nil {
++		test.Fatal(err)
++	}
++	for _, relative := range []string{".probe-user-data", filepath.Join(isolatedBackgroundRunDir, ".probe-other-session")} {
++		if err := view.MkdirAll(filepath.Dir(relative), 0o700); err != nil {
++			test.Fatal(err)
++		}
++		if err := view.WriteFile(relative, []byte("keep"), 0o600); err != nil {
++			test.Fatal(err)
++		}
++	}
++	if err := runner.DeleteIsolatedSession(sessionID); err != nil {
++		test.Fatal(err)
++	}
++	sessionID, err = runner.CreateIsolatedSession(context.Background(), &IsolatedSessionOptions{
++		WorkspacePath: workspace,
++		WorkspaceMode: "rw",
++	})
++	if err != nil {
++		test.Fatal(err)
++	}
++	view, err = runner.GetMergedView(sessionID)
++	if err != nil {
++		test.Fatal(err)
++	}
++	for _, relative := range []string{".probe-user-data", filepath.Join(isolatedBackgroundRunDir, ".probe-other-session")} {
++		contents, err := view.ReadFile(relative)
++		if err != nil || string(contents) != "keep" {
++			test.Errorf("unowned file %q changed: %q, %v", relative, contents, err)
++		}
++	}
++}
++
++func newProbeTestSession(test *testing.T, runner *IsolatedRunner, sessionID, workspace string) *isolatedSession {
++	test.Helper()
++	session := &isolatedSession{
++		id: sessionID,
++		opts: &IsolatedSessionOptions{
++			WorkspacePath: workspace,
++			WorkspaceMode: "rw",
++		},
++		doneCh: make(chan struct{}),
++	}
++	openSessionView(test, session)
++	runner.ctrl.isolatedSessionMap.Store(session.id, session)
++	return session
++}
++
++func submitTestProbe(runner *IsolatedRunner, session *isolatedSession, writer io.Writer) error {
++	session.runMu.Lock()
++	defer session.runMu.Unlock()
++	if err := session.beginOperation(); err != nil {
++		return err
++	}
++	defer session.endOperation()
++	paths, err := session.backgroundRunPaths()
++	if err != nil {
++		return err
++	}
++	return runner.preflightBackgroundLogDir(session, writer, paths)
++}
++
++func queueTestProbe(test *testing.T, runner *IsolatedRunner, session *isolatedSession) string {
++	test.Helper()
++	probeName := ""
++	dispatchErr := errors.New("probe dispatch did not confirm completion")
++	writer := isolatedControlWriter(func(payload []byte) (int, error) {
++		probeName = regexp.MustCompile("\\.probe-[0-9a-f-]+").FindString(string(payload))
++		if probeName == "" || session.pendingBackgroundProbe != probeName {
++			test.Fatal("probe was not registered before dispatch")
++		}
++		return len(payload), dispatchErr
++	})
++	if err := submitTestProbe(runner, session, writer); !errors.Is(err, dispatchErr) {
++		test.Fatalf("probe dispatch error = %v", err)
++	}
++	return probeName
++}
++
++func TestDeleteSessionPreservesAnotherSessionsPendingProbe(test *testing.T) {
++	for _, location := range []string{".", isolatedBackgroundRunDir} {
++		test.Run(location, func(test *testing.T) {
++			synctest.Test(test, func(test *testing.T) {
++				runner := newTestRunner(test)
++				workspace := test.TempDir()
++				probeDir := filepath.Join(workspace, location)
++				if err := os.MkdirAll(probeDir, 0o700); err != nil {
++					test.Fatal(err)
++				}
++				first := newProbeTestSession(test, runner, "30a9ebdd-3b6c-441b-8f8e-9569617ab82f", workspace)
++				second := newProbeTestSession(test, runner, "c6b9689a-753c-42f4-a427-6a0df09b6f40", workspace)
++				test.Cleanup(func() {
++					if err := runner.Close(); err != nil {
++						test.Error(err)
++					}
++				})
++				firstProbe := queueTestProbe(test, runner, first)
++				if err := os.WriteFile(filepath.Join(probeDir, firstProbe), []byte("0"), 0o600); err != nil {
++					test.Fatal(err)
++				}
++				probeWritten := make(chan string, 1)
++				releaseWriter := make(chan struct{})
++				probeDone := make(chan error, 1)
++				writer := isolatedControlWriter(func(payload []byte) (int, error) {
++					probeName := regexp.MustCompile("\\.probe-[0-9a-f-]+").FindString(string(payload))
++					if err := os.WriteFile(filepath.Join(probeDir, probeName), []byte("0"), 0o600); err != nil {
++						return 0, err
++					}
++					probeWritten <- probeName
++					<-releaseWriter
++					return len(payload), nil
++				})
++				go func() { probeDone <- submitTestProbe(runner, second, writer) }()
++				probeName := <-probeWritten
++				if err := runner.DeleteIsolatedSession(first.id); err != nil {
++					test.Error(err)
++				}
++				if _, err := os.Lstat(filepath.Join(probeDir, firstProbe)); !os.IsNotExist(err) {
++					test.Errorf("deleted session's own probe remains: %v", err)
++				}
++				contents, err := os.ReadFile(filepath.Join(probeDir, probeName))
++				if err != nil || string(contents) != "0" {
++					test.Errorf("another session's pending probe changed: %q, %v", contents, err)
++				}
++				close(releaseWriter)
++				if err := <-probeDone; err != nil {
++					test.Errorf("remaining session's preflight: %v", err)
++				}
++			})
++		})
++	}
++}
++
++func TestBackgroundProbeRetainsLateWriteOwnership(test *testing.T) {
++	for _, termination := range []string{"timeout", "session stopped", "dispatch failed"} {
++		test.Run(termination, func(test *testing.T) {
++			synctest.Test(test, func(test *testing.T) {
++				runner := newTestRunner(test)
++				workspace := test.TempDir()
++				session := newProbeTestSession(test, runner, "b926219f-3e53-4e3f-a3ae-89bdbcb77325", workspace)
++				test.Cleanup(func() {
++					if err := runner.Close(); err != nil {
++						test.Error(err)
++					}
++				})
++				probeSent := make(chan string, 1)
++				probeDone := make(chan error, 1)
++				dispatchErr := errors.New("dispatch failed")
++				writer := isolatedControlWriter(func(payload []byte) (int, error) {
++					probeName := regexp.MustCompile("\\.probe-[0-9a-f-]+").FindString(string(payload))
++					probeSent <- probeName
++					if termination == "dispatch failed" {
++						return len(payload), dispatchErr
++					}
++					return len(payload), nil
++				})
++				go func() { probeDone <- submitTestProbe(runner, session, writer) }()
++				probeName := <-probeSent
++				synctest.Wait()
++				if termination == "session stopped" {
++					close(session.doneCh)
++				}
++				if err := <-probeDone; err == nil {
++					test.Fatal("unconfirmed preflight succeeded")
++				} else if termination == "session stopped" && !errors.Is(err, ErrSessionNotActive) {
++					test.Fatalf("stopped preflight error = %v", err)
++				} else if termination == "dispatch failed" && !errors.Is(err, dispatchErr) {
++					test.Fatalf("dispatch error = %v", err)
++				}
++				if session.pendingBackgroundProbe != probeName {
++					test.Fatal("unconfirmed probe lost its cleanup ownership")
++				}
++				if err := os.WriteFile(filepath.Join(workspace, probeName), []byte("0"), 0o600); err != nil {
++					test.Fatal(err)
++				}
++				if err := os.WriteFile(filepath.Join(workspace, ".probe-user-data"), []byte("keep"), 0o600); err != nil {
++					test.Fatal(err)
++				}
++				if err := runner.DeleteIsolatedSession(session.id); err != nil {
++					test.Fatal(err)
++				}
++				if _, err := os.Lstat(filepath.Join(workspace, probeName)); !os.IsNotExist(err) {
++					test.Fatalf("late owned probe remains: %v", err)
++				}
++				contents, err := os.ReadFile(filepath.Join(workspace, ".probe-user-data"))
++				if err != nil || string(contents) != "keep" {
++					test.Fatalf("unowned probe changed: %q, %v", contents, err)
++				}
++			})
++		})
++	}
++}
++
++func TestBackgroundProbePendingCapacityAndFreshResult(test *testing.T) {
++	synctest.Test(test, func(test *testing.T) {
++		runner := newTestRunner(test)
++		workspace := test.TempDir()
++		session := newProbeTestSession(test, runner, "0d1a6f54-ce06-4d7c-9a96-1ce6c8c975f6", workspace)
++		test.Cleanup(func() {
++			if err := runner.Close(); err != nil {
++				test.Error(err)
++			}
++		})
++		firstProbe := queueTestProbe(test, runner, session)
++		if err := os.WriteFile(filepath.Join(workspace, firstProbe), nil, 0o600); err != nil {
++			test.Fatal(err)
++		}
++		writes := 0
++		writer := isolatedControlWriter(func(payload []byte) (int, error) {
++			writes++
++			probeName := regexp.MustCompile("\\.probe-[0-9a-f-]+").FindString(string(payload))
++			if probeName == firstProbe {
++				test.Fatal("new preflight reused the unconfirmed probe identity")
++			}
++			if err := os.WriteFile(filepath.Join(workspace, probeName), []byte("1"), 0o600); err != nil {
++				return 0, err
++			}
++			return len(payload), nil
++		})
++		if err := submitTestProbe(runner, session, writer); err == nil {
++			test.Fatal("another probe was accepted while the prior probe was pending")
++		}
++		if writes != 0 || session.pendingBackgroundProbe != firstProbe {
++			test.Fatal("pending-probe capacity did not stay at one")
++		}
++		if err := os.WriteFile(filepath.Join(workspace, firstProbe), []byte("0"), 0o600); err != nil {
++			test.Fatal(err)
++		}
++		if err := submitTestProbe(runner, session, writer); err == nil {
++			test.Fatal("prior success was reused instead of the new probe's rejection")
++		}
++		if writes != 1 || session.pendingBackgroundProbe != "" {
++			test.Fatal("completed probes did not release their capacity")
++		}
++		if _, err := os.Lstat(filepath.Join(workspace, firstProbe)); !os.IsNotExist(err) {
++			test.Fatalf("completed old probe remains: %v", err)
++		}
++	})
++}
++
++func TestDeleteSessionRetainsProbeUntilNamespaceDrains(test *testing.T) {
++	runner := newTestRunner(test)
++	workspace := test.TempDir()
++	session := newProbeTestSession(test, runner, "d8759d78-d6b1-4d85-8e9f-f46b9ac9042b", workspace)
++	probeName := queueTestProbe(test, runner, session)
++	lifecycle := newLifecycleHarness()
++	terminationErr := errors.New("namespace termination remains unconfirmed")
++	lifecycle.terminationErr = terminationErr
++	session.lifecycle = lifecycle
++	test.Cleanup(func() {
++		lifecycle.terminationErr = nil
++		if err := runner.Close(); err != nil {
++			test.Error(err)
++		}
++	})
++	if err := os.WriteFile(filepath.Join(workspace, probeName), []byte("0"), 0o600); err != nil {
++		test.Fatal(err)
++	}
++	if err := runner.DeleteIsolatedSession(session.id); !errors.Is(err, terminationErr) {
++		test.Fatalf("unconfirmed namespace termination error = %v", err)
++	}
++	if _, err := os.Stat(filepath.Join(workspace, probeName)); err != nil {
++		test.Fatalf("unconfirmed namespace lost its probe: %v", err)
++	}
++	if runner.lookup(session.id) != session || session.pendingBackgroundProbe != probeName {
++		test.Fatal("unconfirmed namespace lost probe ownership")
++	}
++	lifecycle.terminationErr = nil
++	if err := runner.DeleteIsolatedSession(session.id); err != nil {
++		test.Fatal(err)
++	}
++	if _, err := os.Lstat(filepath.Join(workspace, probeName)); !os.IsNotExist(err) {
++		test.Fatalf("confirmed namespace retained its probe: %v", err)
++	}
++}
++
++func TestDeleteSessionPreservesSharedDirectoryBeforeProbeWrite(test *testing.T) {
++	synctest.Test(test, func(test *testing.T) {
++		runner := newTestRunner(test)
++		workspace := test.TempDir()
++		probeDir := filepath.Join(workspace, isolatedBackgroundRunDir)
++		if err := os.MkdirAll(probeDir, 0o700); err != nil {
++			test.Fatal(err)
++		}
++		first := newProbeTestSession(test, runner, "569d3f53-dd01-478c-8a1a-8bc457bbf37c", workspace)
++		second := newProbeTestSession(test, runner, "9e6a2e68-081f-4a53-ab11-ffac0b930e5e", workspace)
++		test.Cleanup(func() {
++			if err := runner.Close(); err != nil {
++				test.Error(err)
++			}
++		})
++		run := &IsolatedBackgroundRun{ID: "first-owned-run", SessionID: first.id}
++		runner.bgRuns.Store(run.ID, run)
++		if err := os.WriteFile(filepath.Join(workspace, run.relLogPath()), []byte("owned"), 0o600); err != nil {
++			test.Fatal(err)
++		}
++		directorySelected := make(chan struct{})
++		allowProbeWrite := make(chan struct{})
++		probeDone := make(chan error, 1)
++		writer := isolatedControlWriter(func(payload []byte) (int, error) {
++			probeName := regexp.MustCompile("\\.probe-[0-9a-f-]+").FindString(string(payload))
++			close(directorySelected)
++			<-allowProbeWrite
++			if err := os.WriteFile(filepath.Join(probeDir, probeName), []byte("0"), 0o600); err != nil {
++				return 0, err
++			}
++			return len(payload), nil
++		})
++		go func() { probeDone <- submitTestProbe(runner, second, writer) }()
++		<-directorySelected
++		if err := runner.DeleteIsolatedSession(first.id); err != nil {
++			test.Error(err)
++		}
++		if _, err := os.Stat(probeDir); err != nil {
++			test.Errorf("another session's selected control directory disappeared: %v", err)
++		}
++		if _, err := os.Lstat(filepath.Join(workspace, run.relLogPath())); !os.IsNotExist(err) {
++			test.Errorf("owned background log remains after deletion: %v", err)
++		}
++		close(allowProbeWrite)
++		if err := <-probeDone; err != nil {
++			test.Errorf("another session's delayed probe write failed: %v", err)
++		}
++	})
++}

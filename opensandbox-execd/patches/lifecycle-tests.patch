@@ -1,0 +1,9 @@
+--- a/components/execd/pkg/runtime/bwrap_test/bwrap_error_test.go
++++ b/components/execd/pkg/runtime/bwrap_test/bwrap_error_test.go
+@@ -99,5 +99,5 @@
+ 	id, err := r.CreateIsolatedSession(context.Background(), opts)
+ 	require.NoError(t, err)
+ 	require.NoError(t, r.DeleteIsolatedSession(id))
+-	assert.Error(t, r.DeleteIsolatedSession(id), "second delete should fail")
++	assert.NoError(t, r.DeleteIsolatedSession(id), "confirmed deletion is idempotent")
+ }

@@ -1,0 +1,498 @@
+--- a/components/execd/pkg/isolation/merged_view.go
++++ b/components/execd/pkg/isolation/merged_view.go
+@@ -112,6 +112,17 @@
+ 	return errors.Join(upperErr, view.lowerRoot.Close())
+ }
+ 
++// OpenWritableRoot opens an independent handle to the pinned writable directory.
++// Overlays expose their upper directory; read-only views reject the operation.
++// The caller must close the returned handle before releasing its session lease.
++func (view *MergedView) OpenWritableRoot() (*os.Root, error) {
++	root, err := view.writableRoot()
++	if err != nil {
++		return nil, err
++	}
++	return root.OpenRoot(".")
++}
++
+ func (view *MergedView) relativePath(name string) (string, error) {
+ 	if name == "" {
+ 		return "", &os.PathError{Op: "workspace", Path: name, Err: fs.ErrInvalid}
+--- a/components/execd/pkg/isolation/merged_view_test.go
++++ b/components/execd/pkg/isolation/merged_view_test.go
+@@ -303,8 +303,42 @@
+ 			require.NoError(test, os.Symlink(fixture.outside, filepath.Join(fixture.lower, "escape")))
+ 			require.Error(test, operation.run(fixture.view, "escape"))
+ 			assertFixtureFile(test, fixture.outside, "file.txt", "outside")
++		})
++	}
++}
++
++func TestMergedViewWritableRootOwnership(test *testing.T) {
++	for _, mode := range []WorkspaceMode{WorkspaceRW, WorkspaceRO, WorkspaceOverlay} {
++		test.Run(string(mode), func(test *testing.T) {
++			fixture := newMergedViewFixture(test, mode)
++			root, err := fixture.view.OpenWritableRoot()
++			if mode == WorkspaceRO {
++				require.Error(test, err)
++				require.Nil(test, root)
++				return
++			}
++			require.NoError(test, err)
++			test.Cleanup(func() { require.NoError(test, root.Close()) })
++			require.NoError(test, root.WriteFile("control", []byte("owned"), 0o600))
++			if mode == WorkspaceOverlay {
++				assertFixtureFile(test, fixture.upper, "control", "owned")
++				_, err := os.Stat(filepath.Join(fixture.lower, "control"))
++				require.ErrorIs(test, err, os.ErrNotExist)
++			} else {
++				assertFixtureFile(test, fixture.lower, "control", "owned")
++			}
++			require.NoError(test, root.Close())
++			require.NoError(test, fixture.view.WriteFile("after-close", []byte("view remains open"), 0o600))
+ 		})
+ 	}
++	test.Run("overlay without upper", func(test *testing.T) {
++		view, err := NewMergedView(test.TempDir(), "", WorkspaceOverlay, uint32(os.Getuid()), uint32(os.Getgid()))
++		require.NoError(test, err)
++		defer view.Close()
++		root, err := view.OpenWritableRoot()
++		require.Error(test, err)
++		require.Nil(test, root)
++	})
+ }
+ 
+ func TestMergedViewRootReplacement(test *testing.T) {
+--- a/components/execd/pkg/runtime/isolated_background.go
++++ b/components/execd/pkg/runtime/isolated_background.go
+@@ -57,19 +57,6 @@
+ type IsolatedBackgroundRun struct {
+ 	ID        string
+ 	SessionID string
+-	logPath   string
+-	exitPath  string
+-	// fallback*: used when the run directory cannot be created inside the
+-	// namespace (e.g. a lower-layer .execd blocks overlay copy-up); the exit
+-	// code is then written to the workspace root instead, so the watcher
+-	// still sees completion.
+-	fallbackLogPath  string
+-	fallbackExitPath string
+-	// logRoot is the host-side directory (upper layer for overlay workspaces,
+-	// the workspace for rw) all control-file operations are pinned to. Files
+-	// are confined beneath it and must be regular files rather than final
+-	// symlinks or special files supplied by sandbox code.
+-	logRoot string
+ 
+ 	mu         sync.Mutex
+ 	startedAt  time.Time
+@@ -80,8 +67,8 @@
+ }
+ 
+ // relLogPath/relExitPath/relFallbackLogPath/relFallbackExitPath return the
+-// run's control files relative to logRoot (the run directory for the primary
+-// files, the workspace root for the fallbacks).
++// run's control files relative to the session's pinned writable directory
++// (the run directory for the primary files, the root for the fallbacks).
+ func (r *IsolatedBackgroundRun) relLogPath() string {
+ 	return filepath.Join(isolatedBackgroundRunDir, r.ID+".log")
+ }
+@@ -225,15 +212,10 @@
+ 	// deleted and the pipe is closed), the record is removed again.
+ 	startedAt := time.Now()
+ 	run := &IsolatedBackgroundRun{
+-		ID:               runID,
+-		SessionID:        id,
+-		logPath:          filepath.Join(paths.hostRunDir, runID+".log"),
+-		exitPath:         filepath.Join(paths.hostRunDir, runID+".code"),
+-		fallbackLogPath:  filepath.Join(paths.hostWorkspace, runID+".log"),
+-		fallbackExitPath: filepath.Join(paths.hostWorkspace, runID+".code"),
+-		logRoot:          paths.hostRoot,
+-		startedAt:        startedAt,
+-		running:          true,
++		ID:        runID,
++		SessionID: id,
++		startedAt: startedAt,
++		running:   true,
+ 	}
+ 	s.activeBackgroundRuns.Add(1)
+ 	r.bgRuns.Store(runID, run)
+@@ -296,7 +278,7 @@
+ 		return fmt.Errorf("write preflight probe: %w", err)
+ 	}
+ 
+-	root, err := os.OpenRoot(paths.hostRoot)
++	root, err := s.view.OpenWritableRoot()
+ 	if err != nil {
+ 		return fmt.Errorf("open background run log root: %w", err)
+ 	}
+@@ -330,7 +312,7 @@
+ // exit-code file, or when the session dies (the run dies with it).
+ func (r *IsolatedRunner) watchBackgroundRun(s *isolatedSession, run *IsolatedBackgroundRun) {
+ 	defer s.endOperation()
+-	root, err := os.OpenRoot(run.logRoot)
++	root, err := s.view.OpenWritableRoot()
+ 	if err != nil {
+ 		// The control-file root is gone (e.g. the upper layer vanished); the
+ 		// run can no longer be tracked, so it never completes normally.
+@@ -428,7 +410,7 @@
+ 	}
+ 	defer session.endOperation()
+ 
+-	root, err := os.OpenRoot(run.logRoot)
++	root, err := session.view.OpenWritableRoot()
+ 	if err != nil {
+ 		return nil, -1, fmt.Errorf("open background run log root: %w", err)
+ 	}
+@@ -509,10 +491,9 @@
+ // from DeleteIsolatedSession after process and operation drain, before the
+ // upper layer and session ownership are released.
+ func (r *IsolatedRunner) removeSessionBackgroundRuns(s *isolatedSession) {
+-	paths, err := s.backgroundRunPaths()
+ 	var root *os.Root
+-	if err == nil {
+-		root, _ = os.OpenRoot(paths.hostRoot)
++	if s.view != nil {
++		root, _ = s.view.OpenWritableRoot()
+ 	}
+ 	if root != nil {
+ 		defer root.Close()
+@@ -542,36 +523,25 @@
+ 	}
+ }
+ 
+-// backgroundRunPaths holds namespace and host paths for a background run.
++// backgroundRunPaths holds shell paths inside the session namespace.
+ type backgroundRunPaths struct {
+-	nsRunDir      string // <workspace>/.execd/background-runs
+-	nsWorkspace   string // workspace path as seen inside the namespace
+-	hostRunDir    string // host-side run dir (upper layer for overlay, workspace for rw)
+-	hostWorkspace string // host-side workspace root (upper dir for overlay)
+-	hostRoot      string // host-side root all control-file ops are pinned to
++	nsRunDir    string
++	nsWorkspace string
+ }
+ 
+-// backgroundRunPaths returns the namespace and host paths of the background
+-// run directory. The host path is the upper layer for overlay workspaces and
+-// the workspace itself for rw workspaces; read-only workspaces reject
+-// background runs (no host-visible writable location for logs).
++// backgroundRunPaths returns the background control paths inside the namespace.
++// Read-only workspaces reject background runs because their logs need writes.
+ func (s *isolatedSession) backgroundRunPaths() (backgroundRunPaths, error) {
+ 	paths := backgroundRunPaths{
+-		nsRunDir:      filepath.Join(s.opts.WorkspacePath, isolatedBackgroundRunDir),
+-		nsWorkspace:   s.opts.WorkspacePath,
+-		hostWorkspace: s.opts.WorkspacePath,
++		nsRunDir:    filepath.Join(s.opts.WorkspacePath, isolatedBackgroundRunDir),
++		nsWorkspace: s.opts.WorkspacePath,
+ 	}
+ 	switch isolation.WorkspaceMode(s.opts.WorkspaceMode) {
+ 	case isolation.WorkspaceRW:
+-		paths.hostRunDir = paths.nsRunDir
+-		paths.hostRoot = s.opts.WorkspacePath
+ 	case isolation.WorkspaceOverlay, "":
+ 		if s.upperDir == "" {
+ 			return backgroundRunPaths{}, fmt.Errorf("background runs unavailable: session has no upper directory")
+ 		}
+-		paths.hostRunDir = filepath.Join(s.upperDir, isolatedBackgroundRunDir)
+-		paths.hostWorkspace = s.upperDir
+-		paths.hostRoot = s.upperDir
+ 	default: // WorkspaceRO
+ 		return backgroundRunPaths{}, fmt.Errorf("background runs not supported in read-only workspace mode")
+ 	}
+--- a/components/execd/pkg/runtime/isolated_background_test.go
++++ b/components/execd/pkg/runtime/isolated_background_test.go
+@@ -370,11 +370,17 @@
+ 	run := &IsolatedBackgroundRun{
+ 		ID:        "run-capped",
+ 		SessionID: "session-capped",
+-		logPath:   logPath,
+-		logRoot:   dir,
+ 	}
+ 	runner.bgRuns.Store(run.ID, run)
+-	runner.ctrl.isolatedSessionMap.Store(run.SessionID, &isolatedSession{id: run.SessionID})
++	session := &isolatedSession{
++		id: run.SessionID,
++		opts: &IsolatedSessionOptions{
++			WorkspacePath: dir,
++			WorkspaceMode: "rw",
++		},
++	}
++	openSessionView(t, session)
++	runner.ctrl.isolatedSessionMap.Store(run.SessionID, session)
+ 
+ 	data, cursor, err := runner.SeekIsolatedBackgroundOutput(run.SessionID, run.ID, 0)
+ 	if err != nil {
+@@ -597,7 +603,7 @@
+ 		t.Fatal("run record missing")
+ 	}
+ 	run := v.(*IsolatedBackgroundRun)
+-	info, err := os.Stat(run.logPath)
++	info, err := runner.lookup(id).view.Stat(run.relLogPath())
+ 	if err != nil {
+ 		t.Fatalf("stat log: %v", err)
+ 	}
+--- a/components/execd/pkg/runtime/isolated_control_cleanup_test.go
++++ b/components/execd/pkg/runtime/isolated_control_cleanup_test.go
+@@ -29,6 +29,7 @@
+ 					WorkspaceMode: string(isolation.WorkspaceRW),
+ 				},
+ 			}
++			openSessionView(test, session)
+ 			runner.sessionIDs = map[string]struct{}{session.id: {}}
+ 			runner.ctrl.isolatedSessionMap.Store(session.id, session)
+ 
+--- /dev/null
++++ b/components/execd/pkg/runtime/isolated_control_root_test.go
+@@ -0,0 +1,251 @@
++//go:build !windows
++
++package runtime
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"regexp"
++	"testing"
++	"testing/synctest"
++	"time"
++
++	"github.com/alibaba/opensandbox/execd/pkg/isolation"
++)
++
++func TestDeleteSessionKeepsPinnedControlRoot(test *testing.T) {
++	for _, mode := range []isolation.WorkspaceMode{isolation.WorkspaceRW, isolation.WorkspaceOverlay} {
++		test.Run(string(mode), func(test *testing.T) {
++			runner := newTestRunner(test)
++			workspace := filepath.Join(test.TempDir(), "workspace")
++			sessionID, err := runner.CreateIsolatedSession(context.Background(), &IsolatedSessionOptions{
++				WorkspacePath: workspace,
++				WorkspaceMode: string(mode),
++			})
++			if err != nil {
++				test.Fatal(err)
++			}
++			test.Cleanup(func() {
++				if err := runner.Close(); err != nil {
++					test.Error(err)
++				}
++			})
++			session := runner.lookup(sessionID)
++			rootPath := workspace
++			if mode == isolation.WorkspaceOverlay {
++				rootPath = session.upperDir
++			}
++			foreignRoot := test.TempDir()
++			run := &IsolatedBackgroundRun{ID: "owned-run", SessionID: sessionID}
++			runner.bgRuns.Store(run.ID, run)
++			artifacts := []string{
++				".probe-owned", filepath.Join(isolatedBackgroundRunDir, ".probe-owned"),
++				run.relLogPath(), run.relExitPath(), run.relFallbackLogPath(), run.relFallbackExitPath(),
++			}
++			for _, root := range []string{rootPath, foreignRoot} {
++				if err := os.MkdirAll(filepath.Join(root, isolatedBackgroundRunDir), 0o700); err != nil {
++					test.Fatal(err)
++				}
++				for _, relative := range artifacts {
++					if err := os.WriteFile(filepath.Join(root, relative), []byte(root), 0o600); err != nil {
++						test.Fatal(err)
++					}
++				}
++			}
++			pinnedPath := rootPath + "-pinned"
++			if err := os.Rename(rootPath, pinnedPath); err != nil {
++				test.Fatal(err)
++			}
++			if err := os.Symlink(foreignRoot, rootPath); err != nil {
++				test.Fatal(err)
++			}
++			if err := runner.DeleteIsolatedSession(sessionID); err != nil {
++				test.Fatal(err)
++			}
++			for _, relative := range artifacts {
++				contents, err := os.ReadFile(filepath.Join(foreignRoot, relative))
++				if err != nil || string(contents) != foreignRoot {
++					test.Errorf("foreign control file %q changed: %q, %v", relative, contents, err)
++				}
++				if _, err := os.Lstat(filepath.Join(pinnedPath, relative)); !os.IsNotExist(err) {
++					test.Errorf("owned control file %q remains after deletion: %v", relative, err)
++				}
++			}
++			if _, exists := runner.bgRuns.Load(run.ID); exists {
++				test.Fatal("deleted session retained its background run")
++			}
++		})
++	}
++}
++
++type isolatedControlWriter func([]byte) (int, error)
++
++func (writer isolatedControlWriter) Write(payload []byte) (int, error) {
++	return writer(payload)
++}
++
++func TestBackgroundControlsKeepPinnedRoot(test *testing.T) {
++	for _, mode := range []isolation.WorkspaceMode{isolation.WorkspaceRW, isolation.WorkspaceOverlay} {
++		test.Run(string(mode), func(test *testing.T) {
++			runner := newTestRunner(test)
++			session := &isolatedSession{
++				id: "2395d9e5-b355-4736-9175-b7a7e2025997",
++				opts: &IsolatedSessionOptions{
++					WorkspacePath: test.TempDir(),
++					WorkspaceMode: string(mode),
++				},
++			}
++			rootPath := session.opts.WorkspacePath
++			if mode == isolation.WorkspaceOverlay {
++				var err error
++				session.upperID, session.upperDir, session.workDir, err = runner.upperMgr.Allocate()
++				if err != nil {
++					test.Fatal(err)
++				}
++				rootPath = session.upperDir
++			}
++			openSessionView(test, session)
++			runner.ctrl.isolatedSessionMap.Store(session.id, session)
++			test.Cleanup(func() {
++				if err := runner.Close(); err != nil {
++					test.Error(err)
++				}
++			})
++			foreignRoot := test.TempDir()
++			run := &IsolatedBackgroundRun{ID: "owned-run", SessionID: session.id, running: true}
++			runner.bgRuns.Store(run.ID, run)
++			for _, root := range []string{rootPath, foreignRoot} {
++				if err := os.MkdirAll(filepath.Join(root, isolatedBackgroundRunDir), 0o700); err != nil {
++					test.Fatal(err)
++				}
++				if err := os.WriteFile(filepath.Join(root, run.relLogPath()), []byte(root), 0o600); err != nil {
++					test.Fatal(err)
++				}
++				code := "17"
++				if root == foreignRoot {
++					code = "99"
++				}
++				if err := os.WriteFile(filepath.Join(root, run.relExitPath()), []byte(code), 0o600); err != nil {
++					test.Fatal(err)
++				}
++			}
++			pinnedPath := filepath.Join(test.TempDir(), "pinned")
++			if err := os.Rename(rootPath, pinnedPath); err != nil {
++				test.Fatal(err)
++			}
++			if err := os.Symlink(foreignRoot, rootPath); err != nil {
++				test.Fatal(err)
++			}
++			paths, err := session.backgroundRunPaths()
++			if err != nil {
++				test.Fatal(err)
++			}
++			probeWriter := isolatedControlWriter(func(payload []byte) (int, error) {
++				probeName := regexp.MustCompile("\\.probe-[0-9a-f-]+").FindString(string(payload))
++				if probeName == "" {
++					return 0, fmt.Errorf("probe name missing")
++				}
++				for root, result := range map[string]string{pinnedPath: "0", foreignRoot: "1"} {
++					if err := os.WriteFile(filepath.Join(root, probeName), []byte(result), 0o600); err != nil {
++						return 0, err
++					}
++				}
++				return len(payload), nil
++			})
++			if err := session.beginOperation(); err != nil {
++				test.Fatal(err)
++			}
++			probeErr := runner.preflightBackgroundLogDir(session, probeWriter, paths)
++			session.endOperation()
++			if probeErr != nil {
++				test.Fatal(probeErr)
++			}
++			contents, _, err := runner.SeekIsolatedBackgroundOutput(session.id, run.ID, 0)
++			if err != nil || string(contents) != rootPath {
++				test.Fatalf("pinned log contents = %q, %v", contents, err)
++			}
++			synctest.Test(test, func(test *testing.T) {
++				if err := session.beginOperation(); err != nil {
++					test.Fatal(err)
++				}
++				session.activeBackgroundRuns.Add(1)
++				go runner.watchBackgroundRun(session, run)
++				synctest.Wait()
++				time.Sleep(isolatedBackgroundPollInterval)
++				synctest.Wait()
++				snapshot := run.snapshot()
++				if snapshot.Running || snapshot.ExitCode == nil || *snapshot.ExitCode != 17 {
++					test.Fatalf("pinned completion = %+v", snapshot)
++				}
++				if session.activeBackgroundRuns.Load() != 0 || session.activeOperations != 0 {
++					test.Fatal("completed watcher retained its operation")
++				}
++			})
++			retainedView := session.view
++			if _, err := retainedView.ReadDir("."); err != nil {
++				test.Fatalf("background operation closed the session view: %v", err)
++			}
++			if err := runner.DeleteIsolatedSession(session.id); err != nil {
++				test.Fatal(err)
++			}
++			if _, err := retainedView.ReadDir("."); !errors.Is(err, os.ErrClosed) {
++				test.Fatalf("delete retained the session view: %v", err)
++			}
++			contents, err = os.ReadFile(filepath.Join(foreignRoot, run.relLogPath()))
++			if err != nil || string(contents) != foreignRoot {
++				test.Fatalf("foreign log changed: %q, %v", contents, err)
++			}
++		})
++	}
++}
++
++func TestFailedStartupKeepsPinnedControlRoot(test *testing.T) {
++	runner := newTestRunner(test)
++	workspace := test.TempDir()
++	foreignRoot := test.TempDir()
++	for _, root := range []string{workspace, foreignRoot} {
++		if err := os.WriteFile(filepath.Join(root, ".probe-owned"), []byte(root), 0o600); err != nil {
++			test.Fatal(err)
++		}
++	}
++	startupErr := errors.New("reject startup after workspace replacement")
++	pinnedPath := filepath.Join(test.TempDir(), "pinned")
++	runner.isolator = &lifecycleHarnessIsolator{
++		returnNil: true,
++		wrapErr:   startupErr,
++		configure: func(*exec.Cmd) {
++			if err := os.Rename(workspace, pinnedPath); err != nil {
++				test.Fatal(err)
++			}
++			if err := os.Symlink(foreignRoot, workspace); err != nil {
++				test.Fatal(err)
++			}
++		},
++	}
++	test.Cleanup(func() {
++		if err := runner.Close(); err != nil {
++			test.Error(err)
++		}
++	})
++	_, err := runner.CreateIsolatedSession(context.Background(), &IsolatedSessionOptions{
++		WorkspacePath: workspace,
++		WorkspaceMode: string(isolation.WorkspaceRW),
++	})
++	if !errors.Is(err, startupErr) {
++		test.Fatalf("startup error = %v", err)
++	}
++	contents, err := os.ReadFile(filepath.Join(foreignRoot, ".probe-owned"))
++	if err != nil || string(contents) != foreignRoot {
++		test.Fatalf("failed-start cleanup changed foreign probe: %q, %v", contents, err)
++	}
++	if _, err := os.Lstat(filepath.Join(pinnedPath, ".probe-owned")); !os.IsNotExist(err) {
++		test.Fatalf("failed-start cleanup retained owned probe: %v", err)
++	}
++	if len(runner.ListIsolatedSessions()) != 0 {
++		test.Fatal("failed startup retained session ownership")
++	}
++}
