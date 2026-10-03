@@ -228,6 +228,8 @@ jobs:
             printf '%s\n' "${result}" >&2
             exit 1
           fi
+          anonymous_config=$(mktemp -d)
+          trap 'rm -rf -- "${anonymous_config}"' EXIT
           digest_refs=()
           for arch in amd64 arm64; do
             matches=("${RUNNER_TEMP}/execd-digests/${arch}-"*)
@@ -236,7 +238,7 @@ jobs:
             digest=${digest_name#"${arch}"-}
             [[ ${digest} =~ ^[0-9a-f]{64}$ ]] || exit 1
             candidate="${IMAGE_NAME}@sha256:${digest}"
-            manifest=$(docker buildx imagetools inspect "${candidate}" --format '{{json .Manifest}}')
+            manifest=$(docker --config "${anonymous_config}" buildx imagetools inspect "${candidate}" --format '{{json .Manifest}}')
             jq --exit-status --arg expected "linux/${arch}" \
               '([.manifests[]?.platform | select(.os == "linux") | "\(.os)/\(.architecture)"] | unique) == [$expected]' <<<"${manifest}"
             digest_refs+=("${candidate}")

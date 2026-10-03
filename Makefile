@@ -78,6 +78,7 @@ entrypoint-test:
 
 static-test:
 	./tests/static-contract.sh
+	python3 tests/release-contract.py
 
 smoke: build
 	./tests/runtime-smoke.sh "$(IMAGE)"
