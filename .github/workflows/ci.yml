@@ -29,7 +29,7 @@ jobs:
       - name: Verify repository contracts
         run: make verify
       - name: Run ShellCheck
-        run: shellcheck scripts/*.sh tests/*.sh
+        run: shellcheck scripts/*.sh tests/*.sh opensandbox-execd/tests/*.sh
 
   image:
     needs: contracts
@@ -48,9 +48,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Verify native runner architecture
         shell: bash
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
         run: |
           runner_arch=$(uname -m)
-          case "${{ matrix.arch }}:${runner_arch}" in
+          case "${EXPECTED_ARCH}:${runner_arch}" in
             amd64:x86_64|arm64:aarch64) ;;
             *) printf 'unexpected runner architecture: %s\n' "${runner_arch}" >&2; exit 1 ;;
           esac
@@ -58,8 +60,11 @@ jobs:
         run: cat versions.env >>"${GITHUB_ENV}"
       - name: Record build metadata
         run: |
-          printf 'BUILD_DATE=%s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >>"${GITHUB_ENV}"
-          printf 'VCS_REF=%s\n' "${GITHUB_SHA}" >>"${GITHUB_ENV}"
+          {
+            printf 'BUILD_DATE=%s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            printf 'VCS_REF=%s\n' "${GITHUB_SHA}"
+            printf 'TEST_RUN_ID=%s\n' "$(python3 -c 'from uuid import uuid4; print(uuid4().hex)')"
+          } >>"${GITHUB_ENV}"
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Build test image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -67,7 +72,8 @@ jobs:
           context: .
           load: true
           platforms: ${{ matrix.platform }}
-          tags: sandbox-runtime:ci-${{ matrix.arch }}
+          tags: sandbox-runtime:ci-${{ env.TEST_RUN_ID }}
+          labels: io.tinkerfin.runtime-test=${{ env.TEST_RUN_ID }}
           build-args: |
             PYTHON_IMAGE=${{ env.PYTHON_IMAGE }}
             RUNTIME_VERSION=${{ env.RUNTIME_VERSION }}
@@ -79,6 +85,7 @@ jobs:
             MAVEN_VERSION=${{ env.MAVEN_VERSION }}
             SETUPTOOLS_VERSION=${{ env.SETUPTOOLS_VERSION }}
             NPM_BRACE_EXPANSION_VERSION=${{ env.NPM_BRACE_EXPANSION_VERSION }}
+            NPM_UNDICI_VERSION=${{ env.NPM_UNDICI_VERSION }}
             NPM_IP_ADDRESS_VERSION=${{ env.NPM_IP_ADDRESS_VERSION }}
             NPM_TAR_VERSION=${{ env.NPM_TAR_VERSION }}
             NPM_TAR_SHA512=${{ env.NPM_TAR_SHA512 }}
@@ -86,6 +93,7 @@ jobs:
             NODE_SHA256_ARM64=${{ env.NODE_SHA256_ARM64 }}
             NPM_SHA512=${{ env.NPM_SHA512 }}
             NPM_BRACE_EXPANSION_SHA512=${{ env.NPM_BRACE_EXPANSION_SHA512 }}
+            NPM_UNDICI_SHA512=${{ env.NPM_UNDICI_SHA512 }}
             NPM_IP_ADDRESS_SHA512=${{ env.NPM_IP_ADDRESS_SHA512 }}
             SETUPTOOLS_SHA256=${{ env.SETUPTOOLS_SHA256 }}
             GO_SHA256_AMD64=${{ env.GO_SHA256_AMD64 }}
@@ -95,11 +103,15 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
       - name: Run runtime smoke test
-        run: ./tests/runtime-smoke.sh sandbox-runtime:ci-${{ matrix.arch }}
+        run: ./tests/runtime-smoke.sh "sandbox-runtime:ci-${TEST_RUN_ID}"
+      - name: Verify workspace helpers installed in the image
+        run: make workspace-test IMAGE="sandbox-runtime:ci-${TEST_RUN_ID}"
+      - name: Verify test cleanup on interruption
+        run: make runtime-signals IMAGE="sandbox-runtime:ci-${TEST_RUN_ID}"
       - name: Report high and critical vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: sandbox-runtime:ci-${{ matrix.arch }}
+          image-ref: sandbox-runtime:ci-${{ env.TEST_RUN_ID }}
           exit-code: "0"
           ignore-unfixed: false
           severity: CRITICAL,HIGH
@@ -109,10 +121,22 @@ jobs:
       - name: Block fixable high and critical vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: sandbox-runtime:ci-${{ matrix.arch }}
+          image-ref: sandbox-runtime:ci-${{ env.TEST_RUN_ID }}
           exit-code: "1"
           ignore-unfixed: true
           severity: CRITICAL,HIGH
           scanners: vuln
           vuln-type: os,library
           version: v0.70.0
+      - name: Remove test image
+        if: always() && env.TEST_RUN_ID != ''
+        run: |
+          candidate="sandbox-runtime:ci-${TEST_RUN_ID}"
+          if docker image inspect "${candidate}" >/dev/null 2>&1; then
+            owner=$(docker image inspect --format '{{index .Config.Labels "io.tinkerfin.runtime-test"}}' "${candidate}")
+            [[ ${owner} == "${TEST_RUN_ID}" ]] || exit 1
+            docker image rm "${candidate}"
+          fi
+          if docker image inspect "${candidate}" >/dev/null 2>&1; then
+            exit 1
+          fi

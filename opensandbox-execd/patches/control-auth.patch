@@ -1,0 +1,86 @@
+diff --git a/components/execd/pkg/web/proxy.go b/components/execd/pkg/web/proxy.go
+index ee36671..0800692 100644
+--- a/components/execd/pkg/web/proxy.go
++++ b/components/execd/pkg/web/proxy.go
+@@ -19,12 +19,15 @@ import (
+ 	"net/http"
+ 	"net/http/httputil"
+ 	"net/url"
++	"strconv"
+ 	"strings"
+ 	"time"
+ 
+ 	"github.com/gin-gonic/gin"
+ 
++	"github.com/alibaba/opensandbox/execd/pkg/flag"
+ 	"github.com/alibaba/opensandbox/execd/pkg/log"
++	"github.com/alibaba/opensandbox/execd/pkg/web/model"
+ )
+ 
+ func ProxyMiddleware() gin.HandlerFunc {
+@@ -83,6 +86,9 @@ func ProxyMiddleware() gin.HandlerFunc {
+ 					req.Header.Set("Sec-WebSocket-Key", key)
+ 				}
+ 			}
++			if port != strconv.Itoa(flag.ServerPort) {
++				req.Header.Del(model.ApiAccessTokenHeader)
++			}
+ 		}
+ 
+ 		proxy.Transport = &http.Transport{
+diff --git a/components/execd/pkg/web/proxy_access_test.go b/components/execd/pkg/web/proxy_access_test.go
+new file mode 100644
+index 0000000..e1fefe8
+--- /dev/null
++++ b/components/execd/pkg/web/proxy_access_test.go
+@@ -0,0 +1,50 @@
++package web
++
++import (
++	"net"
++	"net/http"
++	"net/http/httptest"
++	"strconv"
++	"testing"
++
++	"github.com/gin-gonic/gin"
++	"github.com/stretchr/testify/require"
++
++	"github.com/alibaba/opensandbox/execd/pkg/flag"
++	"github.com/alibaba/opensandbox/execd/pkg/web/model"
++)
++
++func TestProxyKeepsParentTokenOnlyForTheExecdListener(test *testing.T) {
++	gin.SetMode(gin.TestMode)
++	originalPort := flag.ServerPort
++	defer func() { flag.ServerPort = originalPort }()
++	for _, returningToExecd := range []bool{false, true} {
++		received := make(chan string, 1)
++		upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
++			received <- request.Header.Get(model.ApiAccessTokenHeader)
++			response.WriteHeader(http.StatusNoContent)
++		}))
++		address := upstream.Listener.Addr().(*net.TCPAddr)
++		flag.ServerPort = 44772
++		if returningToExecd {
++			flag.ServerPort = address.Port
++		}
++		router := gin.New()
++		router.Use(accessTokenMiddleware("private-parent-token"), ProxyMiddleware())
++		proxyServer := httptest.NewServer(router)
++		defer proxyServer.Close()
++		request, failure := http.NewRequest(http.MethodGet, proxyServer.URL+"/proxy/"+strconv.Itoa(address.Port)+"/ping", nil)
++		require.NoError(test, failure)
++		request.Header.Set(model.ApiAccessTokenHeader, "private-parent-token")
++		response, failure := proxyServer.Client().Do(request)
++		require.NoError(test, failure)
++		response.Body.Close()
++		require.Equal(test, http.StatusNoContent, response.StatusCode)
++		if returningToExecd {
++			require.Equal(test, "private-parent-token", <-received)
++		} else {
++			require.Empty(test, <-received)
++		}
++		upstream.Close()
++	}
++}

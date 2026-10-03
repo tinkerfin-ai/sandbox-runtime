@@ -55,8 +55,11 @@ required_files=(
     scripts/entrypoint.sh
     tests/runtime-smoke.sh
     tests/browser-smoke.py
+    tests/workspace-runtime.sh
     .github/workflows/ci.yml
     .github/workflows/release.yml
+    .github/workflows/opensandbox-server.yml
+    .github/workflows/opensandbox-execd.yml
     LICENSE
     SECURITY.md
     THIRD_PARTY_NOTICES.md
@@ -80,8 +83,10 @@ go_patch=${GO_VERSION##*.}
 [[ ${MAVEN_VERSION} =~ ^3\.9\.[0-9]+$ ]] || fail "Maven must stay on 3.9"
 [[ ${SETUPTOOLS_VERSION:-} =~ ^84\.0\.[0-9]+$ ]] \
     || fail "setuptools must include fixed vendored dependencies from 84.0"
-[[ ${NPM_BRACE_EXPANSION_VERSION:-} == 5.0.9 ]] \
-    || fail "npm brace-expansion must include security fixes from 5.0.9"
+[[ ${NPM_BRACE_EXPANSION_VERSION:-} == 5.0.11 ]] \
+    || fail "npm brace-expansion must include security fixes from 5.0.11"
+[[ ${NPM_UNDICI_VERSION:-} == 6.28.1 ]] \
+    || fail "npm undici must include security fixes from 6.28.1"
 [[ ${NPM_IP_ADDRESS_VERSION:-} == 10.3.1 ]] \
     || fail "npm ip-address must include security fixes from 10.3.1"
 [[ ${NPM_TAR_VERSION:-} == 7.5.21 ]] || fail "npm tar must include security fixes from 7.5.21"
@@ -89,6 +94,8 @@ go_patch=${GO_VERSION##*.}
 [[ ${NPM_SHA512} =~ ^[0-9a-f]{128}$ ]] || fail "npm SHA-512 is invalid"
 [[ ${NPM_BRACE_EXPANSION_SHA512:-} =~ ^[0-9a-f]{128}$ ]] \
     || fail "brace-expansion SHA-512 is invalid"
+[[ ${NPM_UNDICI_SHA512:-} =~ ^[0-9a-f]{128}$ ]] \
+    || fail "undici SHA-512 is invalid"
 [[ ${NPM_IP_ADDRESS_SHA512:-} =~ ^[0-9a-f]{128}$ ]] \
     || fail "ip-address SHA-512 is invalid"
 [[ ${SETUPTOOLS_SHA256:-} =~ ^[0-9a-f]{64}$ ]] \
@@ -172,6 +179,10 @@ done
 
 assert_not_contains '/opt/skills-venv'
 assert_not_contains 'mirrors\.aliyun\.com'
-assert_not_contains 'jupyter'
+if rg --ignore-case --quiet 'jupyter' \
+    "${REPO_ROOT}/Dockerfile" "${REPO_ROOT}/requirements.in" \
+    "${REPO_ROOT}/requirements.lock" "${REPO_ROOT}/scripts"; then
+    fail "runtime installation contains Jupyter"
+fi
 
 printf 'static contract passed\n'

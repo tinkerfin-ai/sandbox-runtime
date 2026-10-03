@@ -12,8 +12,8 @@ Python environment, so sandbox startup does not need to download common dependen
 ## Quick start
 
 ```bash
-docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.2 python --version
-docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.2 mvn --version
+docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.3 python --version
+docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.3 mvn --version
 ```
 
 Use a release tag for evaluation and pin the OCI manifest digest in production.
@@ -53,7 +53,7 @@ from datetime import timedelta
 from opensandbox import SandboxSync
 
 sandbox = SandboxSync.create(
-    "ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.2",
+    "ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.3",
     entrypoint=["/opt/sandbox-runtime/bin/entrypoint.sh"],
     timeout=timedelta(hours=2),
 )
@@ -63,6 +63,15 @@ The runtime environment is built into the image. The entrypoint also propagates
 the supported values through OpenSandbox's `EXECD_ENVS` file when it is present.
 Application files, credentials, skills, and business-specific dependencies must
 be supplied by the consumer.
+
+For project workspaces, deploy the controlled [OpenSandbox Server](opensandbox-server/README.md)
+with [OpenSandbox Execd](opensandbox-execd/README.md). Configure the server's Docker
+network as `bridge`; isolated sessions reject the upstream `host` default and
+networks that share the host or another container's namespace. The server
+authenticates the privileged execd parent and supplies endpoint authentication
+headers to trusted clients. Keep the control plane and raw execd APIs restricted
+to trusted application code. Untrusted commands require non-root isolated
+sessions with explicitly restricted filesystems and networking.
 
 ## Package sources
 
@@ -87,6 +96,7 @@ regenerating the Python lock file.
 make verify
 make build IMAGE=sandbox-runtime:dev
 make smoke IMAGE=sandbox-runtime:dev
+make workspace-test IMAGE=sandbox-runtime:dev
 make lock
 ```
 
@@ -94,6 +104,9 @@ Toolchain versions and archive checksums are defined in `versions.env`.
 Python dependencies are fully pinned with hashes in `requirements.lock`.
 The runtime smoke test checks existing toolchains and launches headless Chromium
 with networking disabled to verify JavaScript interaction and PNG screenshots.
+`make smoke` also runs the workspace contracts against the helpers installed in
+the image. `make workspace-test` runs those contracts separately, covering project
+storage, Python environments, controlled egress and cancellation.
 Use Playwright's default `chromium.launch(headless=True)`; headed browser sessions
 and explicit full-browser channels require a separately supplied browser.
 

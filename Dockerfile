@@ -9,13 +9,15 @@ ARG NODE_VERSION=22.23.2
 ARG NPM_VERSION=12.0.2
 ARG GO_VERSION=1.25.13
 ARG SETUPTOOLS_VERSION=84.0.0
-ARG NPM_BRACE_EXPANSION_VERSION=5.0.9
+ARG NPM_BRACE_EXPANSION_VERSION=5.0.11
+ARG NPM_UNDICI_VERSION=6.28.1
 ARG NPM_IP_ADDRESS_VERSION=10.3.1
 ARG NPM_TAR_VERSION=7.5.21
 ARG NODE_SHA256_AMD64=d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307
 ARG NODE_SHA256_ARM64=fff4078c5def658577f92c88db7db3bc0072924bfb93fe52c1e744a54e94abb8
 ARG NPM_SHA512=b885e890b9418fa1693544d05f53e64f9a73ec194837d4258b15fecdd692347b1dd2a517b1b0cbaf9d31cd8e92c3b70956bd2ecc72833a57b4b3098f5bfa7943
-ARG NPM_BRACE_EXPANSION_SHA512=49c43822ebc8105d533253fb66dfaf8c9ffff7394f6f64837315b13376e4f2ceade8619d27b28ed5d09c4e274e3c929e3d6df42c4ff6713ef00b23e1a3dfd6c6
+ARG NPM_BRACE_EXPANSION_SHA512=6b08a08e18ba70b4e1f746ddc3af9027d0ad9899b26211088bbd2209b73c468ce7d38170f457902018effc4db61451ae086c756cb27251f07ae31feccd449752
+ARG NPM_UNDICI_SHA512=cd6a5d4d50f9e07e3c088c9b2f4ad6437ba4a5bf5ddb7c0cede1f946d7dd99e3fbd1c587363b5fa3b3f8bd95fee42a0370ee772783eee6e5e9ee535f8dce8344
 ARG NPM_IP_ADDRESS_SHA512=d5ef5dde46fdecd1c94c8243656f6b2aa5b687af9d15ae740f2d1fa4f48c429d800e37b982f2ac5e67622ba770639b7be93693b79f8fe4dd58fcba13a08c4fea
 ARG NPM_TAR_SHA512=5dd86d0af94ccb0c31a425bc604ab794e5c126950f4d1d8e1c77302cf3b71f0b09a8e1dad8e93fa09eebb86ce9f89acaa113d50b327001d123a8b5bfbcd44f1c
 ARG SETUPTOOLS_SHA256=51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670
@@ -37,6 +39,7 @@ RUN case "${TARGETARCH}" in \
     && node_archive="node-v${NODE_VERSION}-linux-${node_arch}.tar.xz" \
     && npm_archive="npm-${NPM_VERSION}.tgz" \
     && brace_expansion_archive="brace-expansion-${NPM_BRACE_EXPANSION_VERSION}.tgz" \
+    && undici_archive="undici-${NPM_UNDICI_VERSION}.tgz" \
     && ip_address_archive="ip-address-${NPM_IP_ADDRESS_VERSION}.tgz" \
     && npm_tar_archive="npm-tar-${NPM_TAR_VERSION}.tgz" \
     && setuptools_wheel="setuptools-${SETUPTOOLS_VERSION}-py3-none-any.whl" \
@@ -50,6 +53,10 @@ RUN case "${TARGETARCH}" in \
     && curl --fail --location --retry 5 --output "/tmp/${brace_expansion_archive}" \
         "https://registry.npmjs.org/brace-expansion/-/${brace_expansion_archive}" \
     && printf '%s  %s\n' "${NPM_BRACE_EXPANSION_SHA512}" "/tmp/${brace_expansion_archive}" \
+        | sha512sum --check --strict \
+    && curl --fail --location --retry 5 --output "/tmp/${undici_archive}" \
+        "https://registry.npmjs.org/undici/-/${undici_archive}" \
+    && printf '%s  %s\n' "${NPM_UNDICI_SHA512}" "/tmp/${undici_archive}" \
         | sha512sum --check --strict \
     && curl --fail --location --retry 5 --output "/tmp/${ip_address_archive}" \
         "https://registry.npmjs.org/ip-address/-/${ip_address_archive}" \
@@ -74,14 +81,18 @@ RUN case "${TARGETARCH}" in \
     && npm_root=/opt/sandbox-runtime/node/lib/node_modules/npm \
     && rm -rf \
         "${npm_root}/node_modules/brace-expansion" \
+        "${npm_root}/node_modules/undici" \
         "${npm_root}/node_modules/ip-address" \
         "${npm_root}/node_modules/tar" \
     && install -d \
         "${npm_root}/node_modules/brace-expansion" \
+        "${npm_root}/node_modules/undici" \
         "${npm_root}/node_modules/ip-address" \
         "${npm_root}/node_modules/tar" \
     && tar --extract --gzip --file "/tmp/${brace_expansion_archive}" \
         --directory "${npm_root}/node_modules/brace-expansion" --strip-components 1 \
+    && tar --extract --gzip --file "/tmp/${undici_archive}" \
+        --directory "${npm_root}/node_modules/undici" --strip-components 1 \
     && tar --extract --gzip --file "/tmp/${ip_address_archive}" \
         --directory "${npm_root}/node_modules/ip-address" --strip-components 1 \
     && tar --extract --gzip --file "/tmp/${npm_tar_archive}" \
@@ -93,6 +104,9 @@ RUN case "${TARGETARCH}" in \
             "require('${npm_root}/node_modules/brace-expansion/package.json').version") \
             == "${NPM_BRACE_EXPANSION_VERSION}" ]] \
     && [[ $(/opt/sandbox-runtime/node/bin/node -p \
+            "require('${npm_root}/node_modules/undici/package.json').version") \
+            == "${NPM_UNDICI_VERSION}" ]] \
+    && [[ $(/opt/sandbox-runtime/node/bin/node -p \
             "require('${npm_root}/node_modules/ip-address/package.json').version") \
             == "${NPM_IP_ADDRESS_VERSION}" ]] \
     && tar --extract --gzip --file "/tmp/${go_archive}" \
@@ -100,7 +114,7 @@ RUN case "${TARGETARCH}" in \
 
 FROM ${PYTHON_IMAGE}
 
-ARG RUNTIME_VERSION=0.1.2
+ARG RUNTIME_VERSION=0.1.3
 ARG PYTHON_VERSION=3.11.15
 ARG JAVA_VERSION=21
 ARG NODE_VERSION=22.23.2
@@ -209,6 +223,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && chmod -R a+rX "${PLAYWRIGHT_BROWSERS_PATH}"
 
 COPY --chmod=0755 scripts/entrypoint.sh /opt/sandbox-runtime/bin/entrypoint.sh
+COPY workspace-runtime/ /opt/sandbox-runtime/workspaces/
 
 WORKDIR /workspace
 STOPSIGNAL SIGTERM

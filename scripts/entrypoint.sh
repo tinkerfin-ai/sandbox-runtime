@@ -78,6 +78,16 @@ sync_execd_envs() {
 
 sync_execd_envs
 
+if [[ ${TINKERFIN_WORKSPACES:-} == 1 ]]; then
+    [[ -n ${TINKERFIN_CONTROL_HOST:-} ]] || {
+        printf 'workspace control-plane host is required\n' >&2
+        exit 1
+    }
+    exec /opt/sandbox-runtime/venv/bin/python -I -S -c \
+        "import runpy,sys;sys.path.insert(0,'/opt/sandbox-runtime/workspaces');runpy.run_module('supervise',run_name='__main__')" \
+        --deny-host "${TINKERFIN_CONTROL_HOST}" -- "$@"
+fi
+
 if (($# > 0)); then
     exec "$@"
 fi
