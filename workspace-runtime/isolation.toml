@@ -1,6 +1,6 @@
 allowed_writable = [
     "/var/lib/tinkerfin-workspaces",
-    "/run/tinkerfin-workspace-egress/egress.sock",
+    "/var/lib/execd/isolation/workspace-control/egress.sock",
     "/usr",
     "/opt/sandbox-runtime",
     "/etc/ssl",

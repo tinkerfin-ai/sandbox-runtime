@@ -6,6 +6,7 @@ IMAGE ?= sandbox-runtime:dev
 SERVER_IMAGE ?= opensandbox-server:dev
 EXECD_IMAGE ?= opensandbox-execd:dev
 EXECD_RUNTIME_IMAGE ?= ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.2
+WORKSPACE_EXECD_IMAGE ?= ghcr.io/tinkerfin-ai/opensandbox-execd@sha256:50fcc0386fb893e56eee047c87b3bae40ed2451629606feeaa605ab283df06ce
 UV_CACHE_DIR ?= .cache/uv
 HOST_ARCH := $(shell uname -m)
 
@@ -42,7 +43,7 @@ BUILD_ARGS = \
 	--build-arg GO_SHA256_AMD64=$(GO_SHA256_AMD64) \
 	--build-arg GO_SHA256_ARM64=$(GO_SHA256_ARM64)
 
-.PHONY: build entrypoint-test execd-build execd-test lock runtime-signals server-build server-test smoke static-test verify workspace-test
+.PHONY: build entrypoint-test execd-build execd-test lock runtime-signals server-build server-test smoke static-test verify workspace-restart-test workspace-test
 
 build:
 	docker buildx build --load --platform "$(PLATFORM)" --tag "$(IMAGE)" $(BUILD_ARGS) .
@@ -87,6 +88,11 @@ smoke: build
 
 workspace-test:
 	bash tests/workspace-runtime.sh "$(IMAGE)"
+
+workspace-restart-test:
+	docker pull "$(WORKSPACE_EXECD_IMAGE)"
+	python3 tests/workspace-restart.py "$(IMAGE)" "$(WORKSPACE_EXECD_IMAGE)"
+	python3 tests/workspace-restart-signals.py "$(IMAGE)" "$(WORKSPACE_EXECD_IMAGE)"
 
 runtime-signals:
 	python3 opensandbox-execd/tests/signals.py --runtime-image "$(IMAGE)"

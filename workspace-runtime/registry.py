@@ -27,8 +27,15 @@ from types import TracebackType
 from typing import Literal, cast
 from uuid import UUID, uuid4
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from lifetime import EGRESS_SOCKET as _EGRESS_SOCKET
+from lifetime import current_namespace
+
 _DIGEST = re.compile(r"[a-f0-9]{64}\Z")
+_STAGED_RECORD = re.compile(r"record-[a-z0-9_]+\.pending\Z")
 _MAX_RECORD_BYTES = 16 * 1024 * 1024
+_MAX_RETIRED_SESSIONS = 65536
 _SYSTEM_MOUNTS = (
     "/usr",
     "/opt/sandbox-runtime",
@@ -36,7 +43,6 @@ _SYSTEM_MOUNTS = (
     "/etc/fonts",
     "/etc/ld.so.cache",
 )
-_EGRESS_SOCKET = Path("/run/tinkerfin-workspace-egress/egress.sock")
 
 
 class RegistryError(Exception):
@@ -227,17 +233,23 @@ class ProjectRegistry:
     The root and lock files must be owned by the invoking trusted parent. Lock
     inodes are never removed or replaced, including after project deletion. File
     trees are removed only after admission is sealed and native cleanup has been
-    confirmed. The caller must not call finish_delete after an uncertain DELETE.
+    confirmed. A native DELETE or the supervisor's exact restart receipt supplies
+    that proof; an uncertain result must never permit finish_delete.
+    The current session namespace comes from trusted execd admission and fences
+    delayed requests; it never proves that an older session has stopped.
     """
 
-    def __init__(self, root: Path, *, uid: int, gid: int) -> None:
+    def __init__(
+        self, root: Path, *, uid: int, gid: int, session_namespace: str
+    ) -> None:
         self.root = root
         self.uid = uid
         self.gid = gid
+        self.session_namespace = _uuid(session_namespace)
         if uid < 0 or gid < 0:
             raise ValueError("workspace user and group must not be negative")
         self._trusted_directory(root)
-        for directory in ("locks", "records", "projects", "cancelled"):
+        for directory in ("locks", "records", "projects", "cancelled", "staging"):
             self._trusted_directory(root / directory)
 
     @staticmethod
@@ -255,6 +267,32 @@ class ProjectRegistry:
             raise RegistryError(
                 "workspace registry requires trusted private directories"
             )
+
+    @staticmethod
+    @contextmanager
+    def _existing_directory(
+        path: str | Path, *, parent: int | None = None, uid: int | None = None
+    ) -> Iterator[int]:
+        """Pin trusted storage, including directories not yet handed to the user.
+
+        Startup may have stopped between mkdir and chown. The trusted parent is
+        therefore a valid owner until that handoff; unrelated owners never are.
+        """
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=parent,
+        )
+        try:
+            info = os.fstat(descriptor)
+            expected_uid = os.geteuid() if uid is None else uid
+            if info.st_uid not in {expected_uid, os.geteuid()} or (
+                uid is None and stat.S_IMODE(info.st_mode) != 0o700
+            ):
+                raise RegistryError("workspace cleanup directory is not trusted")
+            yield descriptor
+        finally:
+            os.close(descriptor)
 
     @contextmanager
     def _locked(self, project: str) -> Iterator[None]:
@@ -418,7 +456,9 @@ class ProjectRegistry:
         if len(content) > _MAX_RECORD_BYTES:
             raise RegistryError("workspace ownership record exceeds its capacity")
         directory = self.root / "records"
-        descriptor, temporary = tempfile.mkstemp(dir=directory)
+        descriptor, temporary = tempfile.mkstemp(
+            prefix="record-", suffix=".pending", dir=self.root / "staging"
+        )
         try:
             with os.fdopen(descriptor, "wb") as target:
                 target.write(content)
@@ -453,8 +493,18 @@ class ProjectRegistry:
                 directory.mkdir(mode=0o700)
             except FileExistsError:
                 info = directory.lstat()
-                if not stat.S_ISDIR(info.st_mode) or info.st_uid != self.uid:
+                if not stat.S_ISDIR(info.st_mode) or info.st_uid not in {
+                    self.uid,
+                    os.geteuid(),
+                }:
                     raise RegistryError("workspace data root changed ownership")
+                if info.st_uid != self.uid:
+                    with self._existing_directory(directory) as descriptor:
+                        if os.listdir(descriptor):
+                            raise RegistryError(
+                                "unfinished workspace data root is not empty"
+                            )
+                        os.fchown(descriptor, self.uid, self.gid)
             else:
                 os.chown(directory, self.uid, self.gid)
         runs = incarnation / "runs"
@@ -483,6 +533,8 @@ class ProjectRegistry:
         self, project: str, incarnation: str, owner: SessionOwner
     ) -> ProjectRecord:
         """Record one request only within its previously acknowledged incarnation."""
+        if owner.session_namespace != self.session_namespace:
+            raise RegistryError("workspace session namespace is stale", reason="stale")
         _uuid(incarnation)
         with self._locked(project):
             if self._is_cancelled(project, owner):
@@ -537,6 +589,8 @@ class ProjectRegistry:
         from the workload view. After this method returns, native cancellation
         of the reserved identity fences a delayed session POST.
         """
+        if owner.session_namespace != self.session_namespace:
+            raise RegistryError("workspace session namespace is stale", reason="stale")
         _uuid(incarnation)
         with self._locked(project):
             record = self._read(project)
@@ -639,6 +693,136 @@ class ProjectRegistry:
                 "binds": mounts,
             }
 
+    def _remove_session_data(
+        self, project: str, incarnation: str, owner: SessionOwner
+    ) -> None:
+        with ExitStack() as ownership:
+
+            def optional_directory(
+                name: str, parent: int, *, uid: int | None = None
+            ) -> int | None:
+                try:
+                    return ownership.enter_context(
+                        self._existing_directory(name, parent=parent, uid=uid)
+                    )
+                except FileNotFoundError:
+                    return None
+
+            registry = ownership.enter_context(self._existing_directory(self.root))
+            projects = ownership.enter_context(
+                self._existing_directory("projects", parent=registry)
+            )
+            project_root = optional_directory(project, projects)
+            if project_root is None:
+                return
+            root = optional_directory(incarnation, project_root)
+            if root is None:
+                return
+            trees: list[tuple[int, str]] = []
+            runs = optional_directory("runs", root)
+            if runs is not None:
+                namespace = optional_directory(owner.session_namespace, runs)
+                if namespace is not None:
+                    run = optional_directory(owner.session_id, namespace)
+                    if run is not None:
+                        trees.append((namespace, owner.session_id))
+            dependencies = optional_directory("dependencies", root, uid=self.uid)
+            temporary_name = f".python-{owner.session_id}"
+            temporary_link = False
+            if dependencies is not None:
+                try:
+                    info = os.stat(
+                        temporary_name, dir_fd=dependencies, follow_symlinks=False
+                    )
+                except FileNotFoundError:
+                    pass
+                else:
+                    if stat.S_ISLNK(info.st_mode):
+                        temporary_link = True
+                    else:
+                        ownership.enter_context(
+                            self._existing_directory(
+                                temporary_name, parent=dependencies, uid=self.uid
+                            )
+                        )
+                        trees.append((dependencies, temporary_name))
+            for parent, name in trees:
+                self._remove_tree(name, parent=parent)
+            if temporary_link and dependencies is not None:
+                os.unlink(temporary_name, dir_fd=dependencies)
+
+    @staticmethod
+    def _discard_staged_records(directory: int) -> None:
+        """Remove only unfinished record writes after all previous writers ended."""
+        for name in os.listdir(directory):
+            info = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            if (
+                _STAGED_RECORD.fullmatch(name) is None
+                or not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) != 0o600
+                or info.st_nlink != 1
+            ):
+                raise RegistryError("unfinished workspace record is not trusted")
+            os.unlink(name, dir_fd=directory)
+        os.fsync(directory)
+
+    def retire_sessions(self) -> tuple[SessionOwner, ...]:
+        """Confirm recorded sessions ended at a proven complete container restart.
+
+        Only the startup supervisor may call this before publishing admission,
+        after its exclusive container lifetime claim proves all former processes
+        ended. A different execd namespace alone is not such proof. Records remain
+        unchanged until their existing callers finish release or deletion, so a
+        failed startup never discards ownership needed to retry cleanup.
+
+        Returns:
+            The exact, deduplicated stopped identities for this supervisor to own.
+
+        Raises:
+            RegistryError: A current session, invalid record or exceeded capacity
+                makes recovery uncertain. Admission must remain closed on failure.
+            OSError: A directory is untrusted or cleanup cannot be completed.
+            ValueError: A stored ownership identity or JSON record is invalid.
+        """
+        records: list[tuple[str, ProjectRecord]] = []
+        retired: dict[SessionOwner, None] = {}
+        with ExitStack() as ownership:
+            registry = ownership.enter_context(self._existing_directory(self.root))
+            directories = {
+                name: ownership.enter_context(
+                    self._existing_directory(name, parent=registry)
+                )
+                for name in ("locks", "records", "projects", "cancelled", "staging")
+            }
+            self._discard_staged_records(directories["staging"])
+            for project in sorted(os.listdir(directories["records"])):
+                if _DIGEST.fullmatch(project) is None:
+                    raise RegistryError("invalid workspace record entry")
+                with self._locked(project):
+                    record = self._read(project)
+                    if record is None:
+                        raise RegistryError("workspace ownership record disappeared")
+                for owner in record.sessions:
+                    if owner.session_namespace == self.session_namespace:
+                        raise RegistryError("current workspace session is not stopped")
+                    retired[owner] = None
+                    if len(retired) > _MAX_RETIRED_SESSIONS:
+                        raise RegistryError("workspace recovery exceeds its capacity")
+                if record.sessions:
+                    records.append((project, record))
+            for project, record in records:
+                with self._locked(project):
+                    if self._read(project) != record:
+                        raise RegistryError(
+                            "workspace ownership changed during recovery"
+                        )
+                    for owner in record.sessions:
+                        self._cancel(project, owner)
+                for owner in record.sessions:
+                    self._remove_session_data(project, record.incarnation, owner)
+        return tuple(retired)
+
     def release(self, project: str, incarnation: str, owner: SessionOwner) -> None:
         """Forget a reservation only after its native session has completely ended."""
         _uuid(incarnation)
@@ -649,21 +833,7 @@ class ProjectRegistry:
                 return
             if owner not in record.sessions or record.phase != "active":
                 return
-        self._remove_tree(
-            self.project_path(project, incarnation)
-            / "runs"
-            / owner.session_namespace
-            / owner.session_id
-        )
-        incomplete_python = (
-            self.project_path(project, incarnation)
-            / "dependencies"
-            / f".python-{owner.session_id}"
-        )
-        if incomplete_python.is_symlink():
-            incomplete_python.unlink()
-        else:
-            self._remove_tree(incomplete_python)
+        self._remove_session_data(project, incarnation, owner)
         with self._locked(project):
             record = self._read(project)
             if (
@@ -733,7 +903,7 @@ class ProjectRegistry:
             self._write(project, ProjectRecord(incarnation, "deleted", (), deletion_id))
 
     @staticmethod
-    def _remove_tree(path: Path) -> None:
+    def _remove_tree(path: str | Path, *, parent: int | None = None) -> None:
         if not shutil.rmtree.avoids_symlink_attacks:
             raise RegistryError("directory removal requires descriptor-safe rmtree")
 
@@ -746,7 +916,7 @@ class ProjectRegistry:
             if not isinstance(failure[1], FileNotFoundError):
                 raise failure[1]
 
-        shutil.rmtree(path, onerror=ignore_removed_entry)
+        shutil.rmtree(path, onerror=ignore_removed_entry, dir_fd=parent)
 
 
 def main() -> None:
@@ -764,7 +934,16 @@ def main() -> None:
     request = _mapping(json.loads(content), {"operation", "project", "arguments"})
     operation = _text(request["operation"])
     project = _text(request["project"])
-    registry = ProjectRegistry(arguments.root, uid=arguments.uid, gid=arguments.gid)
+    try:
+        session_namespace = current_namespace()
+    except RuntimeError:
+        raise RegistryError("workspace admission is unavailable") from None
+    registry = ProjectRegistry(
+        arguments.root,
+        uid=arguments.uid,
+        gid=arguments.gid,
+        session_namespace=session_namespace,
+    )
     payload = request["arguments"]
     result: ProjectRecord | None = None
     if operation == "session_request":
