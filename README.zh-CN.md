@@ -12,8 +12,8 @@
 ## 快速使用
 
 ```bash
-docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.4 python --version
-docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.4 mvn --version
+docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.5 python --version
+docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.5 mvn --version
 ```
 
 测试时可以使用精确版本标签；生产环境应固定 OCI manifest digest。精确版本标签
@@ -51,7 +51,7 @@ from datetime import timedelta
 from opensandbox import SandboxSync
 
 sandbox = SandboxSync.create(
-    "ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.4",
+    "ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.5",
     entrypoint=["/opt/sandbox-runtime/bin/entrypoint.sh"],
     timeout=timedelta(hours=2),
 )
