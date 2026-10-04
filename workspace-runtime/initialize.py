@@ -85,20 +85,11 @@ def project_environment() -> dict[str, str]:
         "TMPDIR": "/tmp",
         "XDG_CACHE_HOME": "/cache",
         "VIRTUAL_ENV": "/dependencies/python",
-        "PATH": ":".join(
-            (
-                "/dependencies/python/bin",
-                "/dependencies/node/bin",
-                "/dependencies/go/bin",
-                "/opt/sandbox-runtime/venv/bin",
-                "/opt/sandbox-runtime/node/bin",
-                "/opt/sandbox-runtime/go/bin",
-                "/opt/sandbox-runtime/jdk/bin",
-                "/opt/sandbox-runtime/maven/bin",
-                "/usr/local/bin",
-                "/usr/bin",
-                "/bin",
-            )
+        "PATH": (
+            "/dependencies/python/bin:/dependencies/node/bin:/dependencies/go/bin:"
+            "/opt/sandbox-runtime/venv/bin:/opt/sandbox-runtime/node/bin:"
+            "/opt/sandbox-runtime/go/bin:/opt/sandbox-runtime/jdk/bin:"
+            "/opt/sandbox-runtime/maven/bin:/usr/local/bin:/usr/bin:/bin"
         ),
         "PYTHONNOUSERSITE": "1",
         "PYTHONUNBUFFERED": "1",

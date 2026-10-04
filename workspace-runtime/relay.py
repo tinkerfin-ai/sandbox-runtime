@@ -17,6 +17,8 @@ from egress import (
     serve_until_signal,
 )
 
+_DEFAULT_LIMITS = Limits()
+
 
 class Relay:
     """Relay only an owned IPv4 loopback listener to one fixed proxy socket.
@@ -39,7 +41,7 @@ class Relay:
         proxy_socket: str,
         *,
         egress_token: str,
-        limits: Limits = Limits(),
+        limits: Limits = _DEFAULT_LIMITS,
     ) -> None:
         if (
             listener.family != socket.AF_INET

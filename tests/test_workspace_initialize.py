@@ -133,9 +133,11 @@ class InitializeTest(unittest.TestCase):
             (dependencies / "python").mkdir()
             sentinel = dependencies / "python" / "sentinel"
             sentinel.write_bytes(b"existing-project-data")
-            with patch.object(initialize, "_DEPENDENCIES", dependencies):
-                with self.assertRaises(RuntimeError):
-                    initialize.prepare_python(str(uuid4()))
+            with (
+                patch.object(initialize, "_DEPENDENCIES", dependencies),
+                self.assertRaises(RuntimeError),
+            ):
+                initialize.prepare_python(str(uuid4()))
             self.assertEqual(sentinel.read_bytes(), b"existing-project-data")
 
 

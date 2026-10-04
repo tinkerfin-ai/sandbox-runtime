@@ -25,7 +25,11 @@ jobs:
       - name: Install contract tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends ripgrep
+          sudo apt-get install --yes --no-install-recommends ripgrep python3-venv
+          python3 -m venv "${RUNNER_TEMP}/ruff"
+          "${RUNNER_TEMP}/ruff/bin/python" -m pip install --disable-pip-version-check ruff==0.16.2
+      - name: Run Ruff
+        run: '"${RUNNER_TEMP}/ruff/bin/ruff" check --no-cache .'
       - name: Verify repository contracts
         run: make verify
       - name: Run ShellCheck
