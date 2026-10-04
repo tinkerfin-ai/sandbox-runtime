@@ -64,6 +64,9 @@ class Limits:
     idle_timeout: float = 60
 
 
+_DEFAULT_LIMITS = Limits()
+
+
 class Rejected(Exception):
     """A request cannot be safely forwarded; its status is safe to disclose."""
 
@@ -710,7 +713,7 @@ class EgressProxy:
         *,
         deny_hosts: Sequence[str] = (),
         deny_networks: Sequence[str] = (),
-        limits: Limits = Limits(),
+        limits: Limits = _DEFAULT_LIMITS,
     ) -> None:
         if listener.family != socket.AF_UNIX:
             raise ValueError("Egress requires a Unix listener")

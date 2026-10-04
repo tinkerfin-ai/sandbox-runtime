@@ -15,6 +15,7 @@ import unittest
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from types import TracebackType
+from typing import Self
 from unittest import mock
 from uuid import uuid4
 
@@ -27,6 +28,7 @@ OTHER_PUBLIC = ipaddress.ip_address("1.1.1.1")
 HEADER = b"GET http://public.example/file HTTP/1.1\r\nHost: public.example\r\n\r\n"
 Lookup = Callable[[str], Awaitable[tuple[egress.IPAddress, ...]]]
 Handler = Callable[[asyncio.StreamReader, asyncio.StreamWriter], Awaitable[None]]
+_DEFAULT_LIMITS = egress.Limits()
 
 
 async def public_lookup(hostname: str) -> tuple[egress.IPAddress, ...]:
@@ -65,7 +67,7 @@ async def proxy_running(
     *,
     denied_hosts: tuple[str, ...] = (),
     denied_networks: tuple[str, ...] = (),
-    limits: egress.Limits = egress.Limits(),
+    limits: egress.Limits = _DEFAULT_LIMITS,
 ) -> AsyncIterator[ProxyHarness]:
     with tempfile.TemporaryDirectory(dir="/tmp") as directory:
         path = Path(directory) / "proxy.sock"
@@ -325,7 +327,9 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
         for address in denied:
             with self.subTest(address=address):
 
-                async def lookup(hostname: str) -> tuple[egress.IPAddress, ...]:
+                async def lookup(
+                    hostname: str, *, address: str = address
+                ) -> tuple[egress.IPAddress, ...]:
                     return (PUBLIC, ipaddress.ip_address(address))
 
                 async with proxy_running(lookup) as harness:
@@ -471,7 +475,11 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
                 captured: list[bytes] = []
 
                 async def origin(
-                    reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+                    reader: asyncio.StreamReader,
+                    writer: asyncio.StreamWriter,
+                    *,
+                    captured: list[bytes] = captured,
+                    expected_body: bytes = expected_body,
                 ) -> None:
                     captured.append(await reader.readuntil(b"\r\n\r\n"))
                     captured.append(await reader.readexactly(len(expected_body)))
@@ -512,7 +520,11 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
                 closed = asyncio.Event()
 
                 async def origin(
-                    reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+                    reader: asyncio.StreamReader,
+                    writer: asyncio.StreamWriter,
+                    *,
+                    received: list[bytes] = received,
+                    closed: asyncio.Event = closed,
                 ) -> None:
                     received.append(await reader.read())
                     closed.set()
@@ -696,7 +708,12 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
                 closed = asyncio.Event()
 
                 async def origin(
-                    reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+                    reader: asyncio.StreamReader,
+                    writer: asyncio.StreamWriter,
+                    *,
+                    framing: bytes = framing,
+                    body: bytes = body,
+                    closed: asyncio.Event = closed,
                 ) -> None:
                     await reader.readuntil(b"\r\n\r\n")
                     writer.write(
@@ -744,7 +761,10 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(response=response[:100]):
 
                 async def origin(
-                    reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+                    reader: asyncio.StreamReader,
+                    writer: asyncio.StreamWriter,
+                    *,
+                    response: bytes = response,
                 ) -> None:
                     await reader.readuntil(b"\r\n\r\n")
                     writer.write(response)
@@ -986,7 +1006,7 @@ class ControlledDeadline:
         self.active = False
         self.expired = False
 
-    async def __aenter__(self) -> ControlledDeadline:
+    async def __aenter__(self) -> Self:
         self.task = asyncio.current_task()
         self.active = True
         self.owner.changed.set()

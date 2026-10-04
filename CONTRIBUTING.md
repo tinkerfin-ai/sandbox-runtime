@@ -14,6 +14,7 @@ private registries, and business-specific dependencies.
    the pull request.
 
 ```bash
+uvx ruff==0.16.2 check --no-cache .
 make verify
 make smoke IMAGE=sandbox-runtime:dev
 ```
