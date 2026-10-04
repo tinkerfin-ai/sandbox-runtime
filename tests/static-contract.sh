@@ -83,8 +83,8 @@ go_patch=${GO_VERSION##*.}
 [[ ${MAVEN_VERSION} =~ ^3\.9\.[0-9]+$ ]] || fail "Maven must stay on 3.9"
 [[ ${SETUPTOOLS_VERSION:-} =~ ^84\.0\.[0-9]+$ ]] \
     || fail "setuptools must include fixed vendored dependencies from 84.0"
-[[ ${NPM_BRACE_EXPANSION_VERSION:-} == 5.0.11 ]] \
-    || fail "npm brace-expansion must include security fixes from 5.0.11"
+[[ ${NPM_BRACE_EXPANSION_VERSION:-} == 5.0.12 ]] \
+    || fail "npm brace-expansion must include security fixes from 5.0.12"
 [[ ${NPM_UNDICI_VERSION:-} == 6.28.1 ]] \
     || fail "npm undici must include security fixes from 6.28.1"
 [[ ${NPM_IP_ADDRESS_VERSION:-} == 10.3.1 ]] \

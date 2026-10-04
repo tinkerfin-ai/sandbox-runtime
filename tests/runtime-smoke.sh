@@ -117,7 +117,7 @@ PY
     test "$(npm --version)" = 12.0.2
     test "$(node -p \
         "require(\"/opt/sandbox-runtime/node/lib/node_modules/npm/node_modules/brace-expansion/package.json\").version")" \
-        = 5.0.11
+        = 5.0.12
     test "$(node -p \
         "require(\"/opt/sandbox-runtime/node/lib/node_modules/npm/node_modules/undici/package.json\").version")" \
         = 6.28.1
