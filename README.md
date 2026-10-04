@@ -12,8 +12,8 @@ Python environment, so sandbox startup does not need to download common dependen
 ## Quick start
 
 ```bash
-docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.5 python --version
-docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.5 mvn --version
+docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.6 python --version
+docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.6 mvn --version
 ```
 
 Use a release tag for evaluation and pin the OCI manifest digest in production.
@@ -53,7 +53,7 @@ from datetime import timedelta
 from opensandbox import SandboxSync
 
 sandbox = SandboxSync.create(
-    "ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.5",
+    "ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.6",
     entrypoint=["/opt/sandbox-runtime/bin/entrypoint.sh"],
     timeout=timedelta(hours=2),
 )

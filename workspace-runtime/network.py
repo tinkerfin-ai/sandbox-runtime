@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import errno
 import json
 import socket
 import sys
@@ -15,7 +16,25 @@ from lifetime import CONTROL_SOCKET
 
 
 async def request(payload: dict[str, str], path: Path = CONTROL_SOCKET) -> bytes:
-    """Exchange one bounded request; closing the caller never revokes server ownership."""
+    """Exchange control messages without treating a starting listener as failure.
+
+    The socket closes on completion, failure, deadline, or cancellation. Closing
+    the caller never revokes server-side Run ownership.
+
+    Args:
+        payload: Control action and any required Run ownership fields.
+        path: Unix control socket in the trusted parent's filesystem.
+
+    Returns:
+        Response bytes, or explicit not-ready JSON only for a status request
+        whose socket is missing or not yet listening.
+
+    Raises:
+        OSError: Another connection failure, or any send or receive failure occurs.
+        TimeoutError: The existing request deadline expires.
+        ValueError: The request or response exceeds its byte limit.
+        asyncio.CancelledError: The caller cancels the exchange.
+    """
     encoded = json.dumps(payload, separators=(",", ":")).encode() + b"\n"
     if len(encoded) > 4096:
         raise ValueError("Egress control request is too large")
@@ -23,7 +42,15 @@ async def request(payload: dict[str, str], path: Path = CONTROL_SOCKET) -> bytes
         endpoint.setblocking(False)
         loop = asyncio.get_running_loop()
         async with asyncio.timeout(30):
-            await loop.sock_connect(endpoint, str(path))
+            try:
+                await loop.sock_connect(endpoint, str(path))
+            except OSError as error:
+                if payload == {"operation": "status"} and error.errno in (
+                    errno.ENOENT,
+                    errno.ECONNREFUSED,
+                ):
+                    return b'{"ready":false}\n'
+                raise
             await loop.sock_sendall(endpoint, encoded)
             response = bytearray()
             while True:
