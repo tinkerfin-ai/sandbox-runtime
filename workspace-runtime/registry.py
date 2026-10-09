@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from lifetime import EGRESS_SOCKET as _EGRESS_SOCKET
 from lifetime import current_namespace
+from managed import ManagedDirectories, ManagedDirectoryError
 
 _DIGEST = re.compile(r"[a-f0-9]{64}\Z")
 _STAGED_RECORD = re.compile(r"record-[a-z0-9_]+\.pending\Z")
@@ -480,9 +481,7 @@ class ProjectRegistry:
         _uuid(incarnation)
         return self.root / "projects" / project / incarnation
 
-    def _directories(
-        self, project: str, record: ProjectRecord, owner: SessionOwner
-    ) -> None:
+    def _data_directories(self, project: str, record: ProjectRecord) -> None:
         project_root = self.root / "projects" / project
         self._trusted_directory(project_root)
         incarnation = self.project_path(project, record.incarnation)
@@ -507,6 +506,12 @@ class ProjectRegistry:
                         os.fchown(descriptor, self.uid, self.gid)
             else:
                 os.chown(directory, self.uid, self.gid)
+
+    def _directories(
+        self, project: str, record: ProjectRecord, owner: SessionOwner
+    ) -> None:
+        self._data_directories(project, record)
+        incarnation = self.project_path(project, record.incarnation)
         runs = incarnation / "runs"
         self._trusted_directory(runs)
         self._trusted_directory(runs / owner.session_namespace)
@@ -521,6 +526,7 @@ class ProjectRegistry:
         or data-directory ownership to recover.
         """
         with self._locked(project):
+            ManagedDirectories(self).require_idle(project)
             record = self._read(project)
             if record is not None and record.phase == "deleting":
                 raise RegistryError("workspace deletion is in progress", reason="busy")
@@ -537,6 +543,7 @@ class ProjectRegistry:
             raise RegistryError("workspace session namespace is stale", reason="stale")
         _uuid(incarnation)
         with self._locked(project):
+            ManagedDirectories(self).require_idle(project)
             if self._is_cancelled(project, owner):
                 raise RegistryError(
                     "workspace reservation has been cancelled", reason="stale"
@@ -593,6 +600,7 @@ class ProjectRegistry:
             raise RegistryError("workspace session namespace is stale", reason="stale")
         _uuid(incarnation)
         with self._locked(project):
+            ManagedDirectories(self).require_idle(project)
             record = self._read(project)
             if (
                 record is None
@@ -854,6 +862,7 @@ class ProjectRegistry:
     def begin_delete(self, project: str) -> ProjectRecord | None:
         """Seal admission and return all native requests that must be cancelled."""
         with self._locked(project):
+            ManagedDirectories(self).require_idle(project)
             record = self._read(project)
             if record is None or record.phase in ("deleting", "deleted"):
                 return record
@@ -946,6 +955,19 @@ def main() -> None:
     )
     payload = request["arguments"]
     result: ProjectRecord | None = None
+    if operation in {
+        "managed_begin",
+        "managed_commit",
+        "maintenance_begin",
+        "maintenance_end",
+    }:
+        print(
+            json.dumps(
+                ManagedDirectories(registry).dispatch(project, operation, payload),
+                separators=(",", ":"),
+            )
+        )
+        return
     if operation == "session_request":
         fields = _mapping(payload, {"incarnation", "session_id", "session_namespace"})
         owner = SessionOwner(
@@ -1021,7 +1043,7 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
-    except RegistryError as error:
+    except (RegistryError, ManagedDirectoryError) as error:
         print(json.dumps({"error": {"reason": error.reason, "message": str(error)}}))
         raise SystemExit(1) from None
     except (ValueError, OSError):
