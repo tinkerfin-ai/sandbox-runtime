@@ -26,7 +26,7 @@ docker run --rm ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.7 mvn --version
 | Python | 3.11.15 |
 | OpenJDK | 21 |
 | Node.js / npm | 22.23.2 / 12.0.2 |
-| Go | 1.25.13 |
+| Go | 1.26.9 |
 | Apache Maven | 3.9.9 |
 | Python Playwright | 1.62.0 |
 | Chromium 无界面版本 | Playwright 修订号 1234|

@@ -26,7 +26,7 @@ Exact version tags are immutable. Do not use `latest` as an update channel.
 | Python | 3.11.15 |
 | OpenJDK | 21 |
 | Node.js / npm | 22.23.2 / 12.0.2 |
-| Go | 1.25.13 |
+| Go | 1.26.9 |
 | Apache Maven | 3.9.9 |
 | Playwright for Python | 1.62.0 |
 | Chromium headless shell | Playwright revision 1234 |
