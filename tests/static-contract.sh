@@ -77,9 +77,9 @@ source "${REPO_ROOT}/versions.env"
 [[ ${NPM_VERSION} =~ ^12\.0\.[0-9]+$ ]] || fail "npm must stay on 12.0"
 npm_patch=${NPM_VERSION##*.}
 ((10#${npm_patch} >= 2)) || fail "npm must include security fixes from 12.0.2"
-[[ ${GO_VERSION} =~ ^1\.25\.[0-9]+$ ]] || fail "Go must stay on 1.25"
+[[ ${GO_VERSION} =~ ^1\.26\.[0-9]+$ ]] || fail "Go must stay on 1.26"
 go_patch=${GO_VERSION##*.}
-((10#${go_patch} >= 13)) || fail "Go must include security fixes from 1.25.13"
+((10#${go_patch} >= 9)) || fail "Go must include security fixes from 1.26.9"
 [[ ${MAVEN_VERSION} =~ ^3\.9\.[0-9]+$ ]] || fail "Maven must stay on 3.9"
 [[ ${SETUPTOOLS_VERSION:-} =~ ^84\.0\.[0-9]+$ ]] \
     || fail "setuptools must include fixed vendored dependencies from 84.0"
