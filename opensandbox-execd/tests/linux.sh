@@ -4,7 +4,7 @@ set -Eeuo pipefail
 
 SOURCE_ROOT=${1:?usage: bash opensandbox-execd/tests/linux.sh UPSTREAM_SOURCE_ROOT [EXECD_IMAGE]}
 EXECD_IMAGE=${2:-opensandbox-execd:dev}
-RUNTIME_IMAGE=${EXECD_RUNTIME_IMAGE:-ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.2}
+RUNTIME_IMAGE=${EXECD_RUNTIME_IMAGE:-ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.7@sha256:155b3847039b52b61e016b9fde6d8616a9c988f187a480dd2bb49dacfde33cbc}
 RUN_ID=$(python3 -c 'from uuid import uuid4; print(uuid4().hex)')
 SOURCE_NAME="tinkerfin-execd-unit-source-${RUN_ID}"
 RUNTIME_NAME="tinkerfin-execd-linux-${RUN_ID}"

@@ -5,8 +5,8 @@ include opensandbox-execd/versions.env
 IMAGE ?= sandbox-runtime:dev
 SERVER_IMAGE ?= opensandbox-server:dev
 EXECD_IMAGE ?= opensandbox-execd:dev
-EXECD_RUNTIME_IMAGE ?= ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.2
-WORKSPACE_EXECD_IMAGE ?= ghcr.io/tinkerfin-ai/opensandbox-execd@sha256:50fcc0386fb893e56eee047c87b3bae40ed2451629606feeaa605ab283df06ce
+EXECD_RUNTIME_IMAGE ?= ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.7@sha256:155b3847039b52b61e016b9fde6d8616a9c988f187a480dd2bb49dacfde33cbc
+WORKSPACE_EXECD_IMAGE ?= ghcr.io/tinkerfin-ai/opensandbox-execd@sha256:0dae9cfac0b42aa213ceaecd13c46aeadd7ddde5298918025148427099f4c830
 UV_CACHE_DIR ?= .cache/uv
 HOST_ARCH := $(shell uname -m)
 

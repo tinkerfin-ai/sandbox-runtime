@@ -9,7 +9,7 @@ upstream bubblewrap 0.11.2 and native session gate.
 ## Build and verify
 
 ```bash
-docker pull ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.2
+docker pull ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.7@sha256:155b3847039b52b61e016b9fde6d8616a9c988f187a480dd2bb49dacfde33cbc
 make execd-build EXECD_IMAGE=opensandbox-execd:dev
 make execd-test EXECD_IMAGE=opensandbox-execd:dev
 ```

@@ -33,7 +33,7 @@ from uuid import uuid4
 
 EXECD_IMAGE = (
     "ghcr.io/tinkerfin-ai/opensandbox-execd@sha256:"
-    "50fcc0386fb893e56eee047c87b3bae40ed2451629606feeaa605ab283df06ce"
+    "0dae9cfac0b42aa213ceaecd13c46aeadd7ddde5298918025148427099f4c830"
 )
 OWNER_LABEL = "io.tinkerfin.workspace-restart-test"
 PYTHON = "/opt/sandbox-runtime/venv/bin/python"
