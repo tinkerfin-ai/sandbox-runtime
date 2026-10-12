@@ -5,7 +5,7 @@ set -Eeuo pipefail
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 EXECD_IMAGE=${1:?usage: bash opensandbox-execd/tests/image.sh EXECD_IMAGE [EXECD_BINARY]}
 EXECD_BINARY=${2:-}
-RUNTIME_IMAGE=${EXECD_RUNTIME_IMAGE:-ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.2}
+RUNTIME_IMAGE=${EXECD_RUNTIME_IMAGE:-ghcr.io/tinkerfin-ai/sandbox-runtime:0.1.7@sha256:155b3847039b52b61e016b9fde6d8616a9c988f187a480dd2bb49dacfde33cbc}
 RUN_ID=$(python3 -c 'from uuid import uuid4; print(uuid4().hex)')
 SOURCE_NAME="tinkerfin-execd-source-${RUN_ID}"
 RUNTIME_NAME="tinkerfin-execd-integration-${RUN_ID}"
