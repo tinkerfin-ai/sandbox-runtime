@@ -4,6 +4,10 @@ import json
 import unittest
 from contextlib import ExitStack
 from importlib.metadata import version
+from itertools import product
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from threading import Event, Thread
 from unittest.mock import MagicMock, patch
 
 from fastapi import HTTPException
@@ -20,6 +24,8 @@ from opensandbox_server.services.constants import (
     SANDBOX_HTTP_PORT_LABEL,
 )
 from opensandbox_server.services.docker import DockerSandboxService
+from opensandbox_server.services.docker.networking import EGRESS_SIDECAR_LABEL
+from opensandbox_server.services.docker.persistent import PersistentSandboxLifecycle
 
 with (
     patch("opensandbox_server.services.factory.create_sandbox_service"),
@@ -107,6 +113,7 @@ class ProvisioningContract(unittest.IsolatedAsyncioTestCase):
             endpoint = service.get_endpoint(
                 "owned-sandbox", 18080, resolve_internal=True
             )
+            assert endpoint.headers is not None
             self.assertEqual(endpoint.headers["X-EXECD-ACCESS-TOKEN"], token)
             forwarded = proxy._filter_proxy_headers(
                 {"X-EXECD-ACCESS-TOKEN": "manual-token"},
@@ -220,8 +227,8 @@ class ProvisioningContract(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(version("anyio"), "4.14.2")
         self.assertEqual(version("urllib3"), "2.8.0")
         for isolation in (None, "disable", "enable"):
-            for egress in (False, True):
-                with self.subTest(isolation=isolation, egress=egress):
+            for egress, timeout in product((False, True), (120, None)):
+                with self.subTest(isolation=isolation, egress=egress, timeout=timeout):
                     docker_client = MagicMock()
                     docker_client.containers.list.return_value = []
                     docker_client.api.create_container.return_value = {"Id": "main-id"}
@@ -244,7 +251,7 @@ class ProvisioningContract(unittest.IsolatedAsyncioTestCase):
                     request = CreateSandboxRequest.model_validate(
                         {
                             "image": {"uri": "contract-runtime"},
-                            "timeout": 120,
+                            "timeout": timeout,
                             "resourceLimits": {"memory": "512Mi", "cpu": "500m"},
                             "entrypoint": ["/bin/sh"],
                             "extensions": (
@@ -294,6 +301,10 @@ class ProvisioningContract(unittest.IsolatedAsyncioTestCase):
                     ]
                     enabled = isolation == "enable"
                     self.assertEqual(
+                        host_config.get("restart_policy"),
+                        {"Name": "unless-stopped"} if timeout is None else None,
+                    )
+                    self.assertEqual(
                         set(host_config.get("cap_add", [])),
                         {"SYS_ADMIN", "NET_ADMIN"} if enabled else set(),
                     )
@@ -340,6 +351,213 @@ class ProvisioningContract(unittest.IsolatedAsyncioTestCase):
                             }
                         )
                     )
+
+    def test_explicit_pause_survives_restart_and_resumes_the_same_instance(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            client = MagicMock()
+            companion = MagicMock()
+            companion.attrs = {
+                "Config": {"Labels": {EGRESS_SIDECAR_LABEL: "existing"}},
+                "State": {"Running": True},
+            }
+            client.containers.list.return_value = [companion]
+            container = MagicMock(id="original-container")
+            container.attrs = {
+                "Config": {"Labels": {"opensandbox.io/manual-cleanup": "true"}},
+                "State": {"Running": True, "Paused": False},
+            }
+            owner = PersistentSandboxLifecycle(client, Path(directory))
+            owner.pause("existing", container)
+            self.assertTrue(owner.is_paused("existing"))
+            container.pause.assert_called_once()
+            container.update.assert_called_with(restart_policy={"Name": "no"})
+            companion.update.assert_called_with(restart_policy={"Name": "no"})
+
+            # A new provider process sees exited containers after a daemon reboot.
+            container.attrs["State"] = {"Running": False, "Paused": False}
+            companion.attrs["State"] = {"Running": False}
+            resumed_owner = PersistentSandboxLifecycle(client, Path(directory))
+            resumed_owner.restore_pause("existing", container)
+            container.start.assert_not_called()
+            companion.start.assert_not_called()
+            transitions = []
+            companion.start.side_effect = lambda: transitions.append("network")
+            container.start.side_effect = lambda: transitions.append("sandbox")
+            resumed_owner.resume("existing", container)
+            self.assertEqual(transitions, ["network", "sandbox"])
+            self.assertFalse(resumed_owner.is_paused("existing"))
+            container.update.assert_called_with(
+                restart_policy={"Name": "unless-stopped"}
+            )
+            companion.update.assert_called_with(
+                restart_policy={"Name": "unless-stopped"}
+            )
+            client.containers.create.assert_not_called()
+            container.remove.assert_not_called()
+
+    def test_retained_egress_companion_uses_the_parent_restart_policy(self) -> None:
+        for retained in (False, True):
+            with self.subTest(retained=retained):
+                client = MagicMock()
+                client.containers.list.return_value = []
+                client.api.create_container.return_value = {"Id": "owned-network"}
+                client.api.create_host_config.side_effect = lambda **kwargs: kwargs
+                config = AppConfig(
+                    runtime=RuntimeConfig(type="docker", execd_image="contract-execd"),
+                    docker=DockerConfig(network_mode="bridge"),
+                    egress=EgressConfig(image="contract-egress"),
+                )
+                request = CreateSandboxRequest.model_validate(
+                    {
+                        "image": {"uri": "contract-runtime"},
+                        "timeout": None if retained else 120,
+                        "resourceLimits": {},
+                        "entrypoint": ["/bin/sh"],
+                        "networkPolicy": {"defaultAction": "deny", "egress": []},
+                    }
+                )
+                with patch(
+                    "opensandbox_server.services.docker.docker_service.docker.from_env",
+                    return_value=client,
+                ):
+                    service = DockerSandboxService(config=config)
+                with patch.object(service, "_ensure_image_available"):
+                    assert request.network_policy is not None
+                    service._start_egress_sidecar(
+                        "existing",
+                        request.network_policy,
+                        "test-owned-token",
+                        44772,
+                        8080,
+                        persistent=retained,
+                    )
+                host = client.api.create_container.call_args.kwargs["host_config"]
+                self.assertEqual(
+                    host.get("restart_policy"),
+                    {"Name": "unless-stopped"} if retained else None,
+                )
+
+    def test_manual_stop_without_pause_intent_is_never_started(self) -> None:
+        with TemporaryDirectory() as directory:
+            client = MagicMock()
+            client.containers.list.return_value = []
+            container = MagicMock()
+            container.attrs = {
+                "Config": {"Labels": {"opensandbox.io/manual-cleanup": "true"}},
+                "State": {"Running": False, "Paused": False},
+            }
+            owner = PersistentSandboxLifecycle(client, Path(directory))
+            owner.restore_pause("existing", container)
+            with self.assertRaises(HTTPException) as captured:
+                owner.resume("existing", container)
+            self.assertEqual(captured.exception.status_code, 409)
+            container.start.assert_not_called()
+            container.update.assert_not_called()
+
+    def test_startup_rechecks_pause_intent_after_concurrent_resume(self) -> None:
+        with TemporaryDirectory() as directory:
+            client = MagicMock()
+            client.containers.list.return_value = []
+            container = MagicMock()
+            state = {"Running": True, "Paused": False}
+            container.attrs = {
+                "Config": {"Labels": {"opensandbox.io/manual-cleanup": "true"}},
+                "State": state,
+            }
+            container.pause.side_effect = lambda: state.update(Paused=True)
+            container.unpause.side_effect = lambda: state.update(Paused=False)
+            owner = PersistentSandboxLifecycle(client, Path(directory))
+            owner.pause("existing", container)
+            inspected, release = Event(), Event()
+            failures = []
+
+            class Startup(PersistentSandboxLifecycle):
+                def is_paused(self, sandbox_id: str) -> bool:
+                    paused = super().is_paused(sandbox_id)
+                    if paused and not inspected.is_set():
+                        inspected.set()
+                        release.wait()
+                    return paused
+
+            def restore() -> None:
+                try:
+                    Startup(client, Path(directory)).restore_pause(
+                        "existing", container
+                    )
+                except BaseException as error:  # noqa: BLE001 - transfer worker failure to its owner
+                    failures.append(error)
+
+            worker = Thread(target=restore)
+            worker.start()
+            try:
+                inspected.wait()
+                owner.resume("existing", container)
+            finally:
+                release.set()
+                worker.join()
+            self.assertEqual(failures, [])
+            self.assertFalse(owner.is_paused("existing"))
+            self.assertFalse(state["Paused"])
+            container.update.assert_called_with(
+                restart_policy={"Name": "unless-stopped"}
+            )
+
+    def test_startup_defers_to_a_transition_owned_by_another_worker(self) -> None:
+        with TemporaryDirectory() as directory:
+            client = MagicMock()
+            client.containers.list.return_value = []
+            container = MagicMock()
+            container.attrs = {
+                "Config": {"Labels": {"opensandbox.io/manual-cleanup": "true"}},
+                "State": {"Running": True, "Paused": False},
+            }
+            entered, release = Event(), Event()
+            failures = []
+
+            def pause_container() -> None:
+                entered.set()
+                release.wait()
+
+            container.pause.side_effect = pause_container
+
+            def pause() -> None:
+                try:
+                    PersistentSandboxLifecycle(client, Path(directory)).pause(
+                        "existing", container
+                    )
+                except BaseException as error:  # noqa: BLE001 - transfer worker failure to its owner
+                    failures.append(error)
+
+            worker = Thread(target=pause)
+            worker.start()
+            try:
+                entered.wait()
+                container.update.reset_mock()
+                PersistentSandboxLifecycle(client, Path(directory)).restore_pause(
+                    "existing", container
+                )
+                container.update.assert_not_called()
+            finally:
+                release.set()
+                worker.join()
+            self.assertEqual(failures, [])
+
+    def test_failed_resume_retains_pause_intent_for_reconciliation(self) -> None:
+        with TemporaryDirectory() as directory:
+            client = MagicMock()
+            client.containers.list.return_value = []
+            container = MagicMock()
+            container.attrs = {"State": {"Running": True, "Paused": False}}
+            owner = PersistentSandboxLifecycle(client, Path(directory))
+            owner.pause("existing", container)
+            container.attrs["State"] = {"Running": False, "Paused": False}
+            container.start.side_effect = RuntimeError("test-owned start failure")
+            with self.assertRaisesRegex(RuntimeError, "test-owned"):
+                owner.resume("existing", container)
+            self.assertTrue(owner.is_paused("existing"))
+            container.update.assert_called_with(restart_policy={"Name": "no"})
 
 
 if __name__ == "__main__":

@@ -11,6 +11,8 @@ From the repository root:
 ```bash
 make server-build SERVER_IMAGE=opensandbox-server:dev
 make server-test SERVER_IMAGE=opensandbox-server:dev
+docker pull docker:27.2.0-dind
+make server-restart-test SERVER_IMAGE=opensandbox-server:dev
 ```
 
 Docker Buildx selects `linux/amd64` or `linux/arm64` for the current host.
@@ -30,6 +32,11 @@ own labeled container. It does not certify application workspace isolation.
 Signal checks interrupt the owning shell with `SIGINT` and `SIGTERM` after the
 container reports readiness and verify cleanup and the corresponding exit code.
 
+The restart integration borrows the cached images and owns a disposable Docker
+daemon, its containers and its data volumes. It verifies automatic recovery,
+manual stop, durable pause, explicit resume and preservation of IDs and files.
+It never restarts the host Docker daemon and removes only its own resources.
+
 ## Deploy
 
 Use this image for the OpenSandbox control plane. Keep the existing server
@@ -45,6 +52,15 @@ host networking, host-network IDs and `container:<other>` before allocating
 sandbox resources. A server-created egress sidecar remains supported with
 `network_mode = "bridge"`. The server entrypoint and configuration schema are
 unchanged.
+
+Retained sandboxes (`timeout=null`) and their egress companions use Docker's
+`unless-stopped` restart policy. They recover when Docker starts, preserving
+their container IDs and files. A manually stopped container stays stopped.
+Explicit pause remains effective across both control-plane and Docker restarts;
+the resume API can start that original container after a reboot. Persist the
+server metadata directory (`/root/.opensandbox/metadata`) across control-plane
+replacements so saved pause intent remains available. Finite-TTL instances keep
+the upstream lifecycle and expiry behavior.
 
 The existing `bootstrap.execd.isolation=enable` extension grants `SYS_ADMIN`
 and `NET_ADMIN` to the trusted sandbox parent, disables its AppArmor and seccomp
@@ -70,8 +86,8 @@ not a security boundary against that parent.
 ## Publish
 
 The `OpenSandbox Server` workflow verifies each architecture on a native runner.
-A Git tag `server-v0.2.3-tinkerfin.1` matching `versions.env` publishes
-`ghcr.io/tinkerfin-ai/opensandbox-server:0.2.3-tinkerfin.1` after its image tests
+A Git tag `server-v0.2.3-tinkerfin.2` matching `versions.env` publishes
+`ghcr.io/tinkerfin-ai/opensandbox-server:0.2.3-tinkerfin.2` after its image tests
 and vulnerability checks pass. Exact image tags cannot be overwritten.
 Pin the resulting OCI index digest in deployment configuration.
 Published registry artifacts are retained. Local image references pulled only

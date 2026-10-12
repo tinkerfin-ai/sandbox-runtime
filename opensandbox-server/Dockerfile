@@ -2,7 +2,7 @@
 
 FROM opensandbox/server:v0.2.3@sha256:ae8dfbb277f40a39ff01ef35e5e1c10675acfe0fa9db15259b8f323e5efab778
 
-ARG SERVER_VERSION=0.2.3-tinkerfin.1
+ARG SERVER_VERSION=0.2.3-tinkerfin.2
 ARG VCS_REF=unknown
 
 RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources \
@@ -26,6 +26,8 @@ RUN --mount=type=bind,source=opensandbox-server/security-requirements.txt,target
         --requirement /tmp/security-requirements.txt \
     && /usr/local/bin/python -m pip check \
     && /usr/local/bin/python -m pip --python /app/.venv check
+
+COPY opensandbox-server/persistent.py /app/opensandbox_server/services/docker/persistent.py
 
 RUN --mount=type=bind,source=opensandbox-server/apply-patch.py,target=/tmp/apply-patch.py \
     python /tmp/apply-patch.py

@@ -43,7 +43,7 @@ BUILD_ARGS = \
 	--build-arg GO_SHA256_AMD64=$(GO_SHA256_AMD64) \
 	--build-arg GO_SHA256_ARM64=$(GO_SHA256_ARM64)
 
-.PHONY: build entrypoint-test execd-build execd-test lock runtime-signals server-build server-test smoke static-test verify workspace-restart-test workspace-test
+.PHONY: build entrypoint-test execd-build execd-test lock runtime-signals server-build server-test server-restart-test smoke static-test verify workspace-restart-test workspace-test
 
 build:
 	docker buildx build --load --platform "$(PLATFORM)" --tag "$(IMAGE)" $(BUILD_ARGS) .
@@ -55,6 +55,10 @@ server-build:
 server-test:
 	bash tests/server-image.sh "$(SERVER_IMAGE)"
 	python3 tests/server-image-lifecycle.py "$(SERVER_IMAGE)"
+
+server-restart-test:
+	python3 tests/server-restart.py "$(SERVER_IMAGE)"
+	python3 tests/server-restart-signals.py "$(SERVER_IMAGE)"
 
 execd-build:
 	docker buildx build --load --platform "$(PLATFORM)" --file opensandbox-execd/Dockerfile \
