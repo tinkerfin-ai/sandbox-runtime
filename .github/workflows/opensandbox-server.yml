@@ -78,6 +78,22 @@ jobs:
             VCS_REF=${{ github.sha }}
       - name: Verify server provisioning
         run: make server-test SERVER_IMAGE="opensandbox-server:test-${TEST_RUN_ID}"
+      - name: Verify daemon restart and interruption cleanup
+        shell: bash
+        run: |
+          image=docker:27.2.0-dind
+          if ! docker image inspect "$image" >/dev/null 2>&1; then
+            docker pull "$image"
+            printf 'OWNED_DIND_IMAGE=%s\n' "$(docker image inspect --format '{{.Id}}' "$image")" >>"${GITHUB_ENV}"
+          fi
+          make server-restart-test SERVER_IMAGE="opensandbox-server:test-${TEST_RUN_ID}"
+      - name: Remove borrowed-test prerequisite only when acquired here
+        if: always() && env.OWNED_DIND_IMAGE != ''
+        shell: bash
+        run: |
+          actual=$(docker image inspect --format '{{.Id}}' docker:27.2.0-dind)
+          [[ "$actual" == "$OWNED_DIND_IMAGE" ]] || exit 1
+          docker image rm docker:27.2.0-dind
       - name: Report high and critical vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:

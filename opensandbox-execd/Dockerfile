@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
-FROM --platform=$BUILDPLATFORM golang:1.25.13@sha256:cbff9d1a9041b316010f2da6b701b6c0d597718cb90928c85eb597334a0d23d4 AS source
+FROM --platform=$BUILDPLATFORM golang:1.26.9@sha256:d7722066f0b60ceccb6c0643cbed1f5f9e15506ac237146c95333504d7805d89 AS source
 
 ENV GOTOOLCHAIN=local GOFLAGS=-mod=readonly
 
@@ -19,8 +19,8 @@ RUN git apply --check /patches/isolation.patch /patches/control-auth.patch \
     && git apply /patches/lifecycle-tests.patch \
     && git apply --check /patches/capability-drop.patch \
     && git apply /patches/capability-drop.patch \
-    && git apply --check /patches/security-dependencies.patch \
-    && git apply /patches/security-dependencies.patch
+    && git apply --check --unidiff-zero /patches/security-dependencies.patch \
+    && git apply --unidiff-zero /patches/security-dependencies.patch
 WORKDIR /source/components/internal
 RUN go mod download && go mod verify
 WORKDIR /source/components/execd
@@ -33,7 +33,7 @@ RUN go test ./pkg/isolation ./pkg/runtime ./pkg/web/model ./pkg/web/controller .
 FROM test AS builder
 ARG TARGETOS
 ARG TARGETARCH
-ARG EXECD_VERSION=1.0.22-tinkerfin.1
+ARG EXECD_VERSION=1.0.22-tinkerfin.2
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -buildvcs=false \
     -ldflags "-buildid= -B none -X github.com/alibaba/opensandbox/internal/version.Version=${EXECD_VERSION} -X github.com/alibaba/opensandbox/internal/version.GitCommit=4a9db411879601610843af9c8e03563694325b2a" \
     -o /build/execd ./main.go
@@ -60,7 +60,7 @@ ADD --checksum=sha256:20ac252b276d73f2c69c1d25f84537c7fba81caefc026c6be1094b394a
 FROM openssl-${TARGETARCH} AS openssl
 
 FROM opensandbox/execd:v1.0.22@sha256:0d8f44cf4194732719aa79999d4b120c98bdab02bc61e9ad13f75f83af4c2684
-ARG EXECD_VERSION=1.0.22-tinkerfin.1
+ARG EXECD_VERSION=1.0.22-tinkerfin.2
 ARG VCS_REF=unknown
 RUN --mount=type=bind,from=openssl,source=/packages,target=/packages \
     apk add --no-cache --no-network /packages/libcrypto3.apk /packages/libssl3.apk

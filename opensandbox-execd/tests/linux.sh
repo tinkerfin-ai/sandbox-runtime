@@ -51,14 +51,14 @@ docker image inspect "${EXECD_IMAGE}" >/dev/null
 for package in isolation runtime; do
     (
         cd "${SOURCE_ROOT}/components/execd"
-        GOTOOLCHAIN=go1.25.13 GOOS=linux GOARCH="${EXECD_ARCH}" go test -c -o "${TASK_DIRECTORY}/${package}.test" "./pkg/${package}"
+        GOTOOLCHAIN=go1.26.9 GOOS=linux GOARCH="${EXECD_ARCH}" go test -c -o "${TASK_DIRECTORY}/${package}.test" "./pkg/${package}"
     )
 done
 (
     cd "${SOURCE_ROOT}/components/execd"
-    GOTOOLCHAIN=go1.25.13 GOOS=linux GOARCH="${EXECD_ARCH}" go test -tags=bwrap -c \
+    GOTOOLCHAIN=go1.26.9 GOOS=linux GOARCH="${EXECD_ARCH}" go test -tags=bwrap -c \
         -o "${TASK_DIRECTORY}/runtime-native.test" ./pkg/runtime
-    GOTOOLCHAIN=go1.25.13 GOOS=linux GOARCH="${EXECD_ARCH}" go test -tags=bwrap -c \
+    GOTOOLCHAIN=go1.26.9 GOOS=linux GOARCH="${EXECD_ARCH}" go test -tags=bwrap -c \
         -o "${TASK_DIRECTORY}/bwrap.test" ./pkg/runtime/bwrap_test
 )
 docker create --pull never --name "${SOURCE_NAME}" --label "io.tinkerfin.execd-test=${RUN_ID}" --network none "${EXECD_IMAGE}" >/dev/null
