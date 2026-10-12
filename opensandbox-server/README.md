@@ -43,7 +43,7 @@ Use this image for the OpenSandbox control plane. Keep the existing server
 configuration, command and Docker access described in the
 [upstream deployment guide](https://github.com/alibaba/OpenSandbox/tree/c39b814f36ded4c61d5ac6f9332ee4dfbab86c00/server).
 Use the controlled [OpenSandbox Execd](../opensandbox-execd/README.md) image
-`ghcr.io/tinkerfin-ai/opensandbox-execd:1.0.22-tinkerfin.1` for
+`ghcr.io/tinkerfin-ai/opensandbox-execd:1.0.22-tinkerfin.2` for
 `runtime.execd_image`. Pin both server and execd OCI index digests in production.
 Set `network_mode = "bridge"` in the server's `[docker]` section for isolated sessions. `none`
 and user-defined networks with their own network namespace are also accepted.

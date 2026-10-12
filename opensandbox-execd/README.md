@@ -3,7 +3,7 @@
 This image provides isolated sessions with caller-owned identifiers, confirmed
 PID namespace shutdown, and filesystem operations confined to the session's
 opened workspace roots. It builds OpenSandbox execd 1.0.22 at commit
-`4a9db411879601610843af9c8e03563694325b2a` with Go 1.25.13 and retains the pinned
+`4a9db411879601610843af9c8e03563694325b2a` with Go 1.26.9 and retains the pinned
 upstream bubblewrap 0.11.2 and native session gate.
 
 ## Build and verify
@@ -27,13 +27,13 @@ provisioning configuration.
 To run the Linux lifecycle, filesystem, background-run, and tagged bubblewrap
 suites from the patched upstream checkout, use
 `bash opensandbox-execd/tests/linux.sh /path/to/OpenSandbox opensandbox-execd:dev`.
-These tests use Go 1.25.13 and the selected runtime image's Docker architecture.
+These tests use Go 1.26.9 and the selected runtime image's Docker architecture.
 `EXECD_RUNTIME_IMAGE` also selects the runtime for this script.
 
 ## Deploy
 
 Set the controlled server's `runtime.execd_image` to
-`ghcr.io/tinkerfin-ai/opensandbox-execd:1.0.22-tinkerfin.1` and pin its published
+`ghcr.io/tinkerfin-ai/opensandbox-execd:1.0.22-tinkerfin.2` and pin its published
 OCI index digest in production. Follow the
 [server deployment requirements](../opensandbox-server/README.md#deploy) for
 private networking and parent authentication. Use the authenticated endpoint
@@ -106,8 +106,8 @@ closed stream, or the outer bubblewrap monitor's exit as that confirmation.
 ## Publish
 
 The `OpenSandbox Execd` workflow builds and tests on native amd64 and arm64
-runners. A Git tag `execd-v1.0.22-tinkerfin.1` matching `versions.env` publishes
-`ghcr.io/tinkerfin-ai/opensandbox-execd:1.0.22-tinkerfin.1` after the exact platform
+runners. A Git tag `execd-v1.0.22-tinkerfin.2` matching `versions.env` publishes
+`ghcr.io/tinkerfin-ai/opensandbox-execd:1.0.22-tinkerfin.2` after the exact platform
 digests pass native image tests and vulnerability checks. The workflow signs the
 OCI index and publishes build provenance and SBOM attestations. Exact version
 tags cannot be overwritten. Published registry artifacts are retained; locally
